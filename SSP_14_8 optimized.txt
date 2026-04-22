@@ -1,0 +1,3315 @@
+
+// ════════════════════════════════════════════════════════════════════
+// SMC Scalp Pro v13.1 — Multi-Timeframe (1min/5min) Edition
+// Changes from v13.1:
+//   [NEW] Added Timeframe Selector: Choose between 1-minute or 5-minute
+//         scalping with automatic parameter adjustment
+//   [ENH] All time-based parameters now auto-scale based on selected TF
+// ════════════════════════════════════════════════════════════════════
+//@version=5
+indicator("SMC Scalp Pro v14.8 - Optimized", shorttitle="SSP v14.8 [OPT]", overlay=true,
+          max_bars_back=500, max_boxes_count=60, max_lines_count=50, max_labels_count=50)
+
+//// ════════════════════════════════════════════════════════════════════
+// TIMEFRAME SELECTOR (NEW)
+// ════════════════════════════════════════════════════════════════════
+grp_tf = "── ⚙️ TIMEFRAME SETUP ──"
+i_timeframe = input.string("1 Minute", "Scalping Timeframe", 
+              options=["1 Minute", "5 Minute"], group=grp_tf,
+              tooltip="Select your scalping timeframe. All parameters will auto-adjust accordingly.")
+
+// Timeframe multiplier: 1 for 1-min, 5 for 5-min
+tf_mult = i_timeframe == "5 Minute" ? 5.0 : 1.0
+
+grp_regime = "── Regime Filter (Hurst) ──"
+i_hurstLen = int(math.round(30 / tf_mult))   // 1min=30, 5min=6
+
+grp_ob = "── Volume OB ──"
+i_obVolMult  = input.float(2.0, "Min Volume Multiplier",  group=grp_ob, minval=1.0, maxval=5.0, step=0.1)
+i_obMaxCount = input.int(4,     "Max OBs stored",         group=grp_ob, minval=2, maxval=8)
+i_obExtend   = int(math.round(40 / tf_mult))   // 1min=40, 5min=8
+i_obFreshBars= int(math.round(20 / tf_mult))   // 1min=20, 5min=4
+
+grp_fvg = "── FVG ──"
+i_fvgShow   = input.bool(true, "Show FVG",                group=grp_fvg)
+i_fvgMinSz  = input.float(0.3, "Min Size (ATR×)",         group=grp_fvg, minval=0.1, step=0.1)
+i_fvgMinScr = input.int(4,     "Min Score to Show (0–10)",group=grp_fvg, minval=0, maxval=10)
+
+grp_hunt = "── SL Hunt ──"
+i_wickR  = input.float(0.60, "Wick Ratio (Hunt Candle)", group=grp_hunt, minval=0.3, maxval=0.9, step=0.05)
+i_eqlTol = input.float(0.05, "EQH/EQL Tolerance %",     group=grp_hunt, minval=0.01, maxval=0.3, step=0.01)
+
+grp_huntgate = "── Hunt Zone Gate ──"
+i_huntProxATR   = input.float(0.5, "Pre-hunt proximity (ATR×)", group=grp_huntgate, minval=0.2, maxval=2.0, step=0.1)
+i_postSweepBars = int(math.max(1, math.round(5 / tf_mult)))     // 1min=5, 5min=1
+i_instFlowMin   = input.int(45, "Min Inst. Flow Score",         group=grp_huntgate, minval=20, maxval=80)
+
+grp_rr = "── RR-Aware KNN ──"
+i_minRR      = input.float(1.0, "Min RR to allow signal",  group=grp_rr, minval=0.5, maxval=5.0, step=0.25)
+i_cleanMAE   = input.float(0.3, "Clean move MAE (×R)",     group=grp_rr, minval=0.1, maxval=0.7, step=0.1)
+i_ofrlLookFwd= int(math.round(30 / tf_mult))                // 1min=30, 5min=6
+
+grp_z = "── Z-Delta ──"
+i_zBase = input.float(1.0, "Base Z Threshold", group=grp_z, minval=0.3, maxval=3.0, step=0.1)
+
+grp_hud = "── HUD ──"
+i_showHUD = input.bool(true, "Show HUD", group=grp_hud)
+i_hudPos  = input.string("Top Right", "Position", group=grp_hud, options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"])
+i_hudSize = input.string("Normal", "HUD Font Size", group=grp_hud, options=["Tiny", "Small", "Normal", "Large"])
+
+grp_prob = "── Probability Engine ──"
+i_minConvict  = input.float(55.0, "Min % for Normal Signal (▲)", group=grp_prob, minval=30.0, maxval=80.0, step=1.0)
+i_strongThres = input.float(70.0, "Min % for Strong Signal (★)", group=grp_prob, minval=50.0, maxval=90.0, step=1.0)
+i_highThres   = input.float(80.0, "Min % for High Conv (⚡)",    group=grp_prob, minval=60.0, maxval=95.0, step=1.0)
+
+
+grp_iofi = "── IOFI ──"
+i_iofiLen    = int(math.max(3, math.round(14 / tf_mult)))   // 1min=14, 5min=3
+i_iofiSmooth = int(math.max(1, math.round(3  / tf_mult)))   // 1min=3,  5min=1
+i_iofiThres  = input.float(0.6, "Threshold", group=grp_iofi, minval=0.2, maxval=0.9, step=0.05)
+
+grp_vco = "── VCO + CMP ──"
+i_vcoFastLen = int(math.max(1, math.round(5  / tf_mult)))   // 1min=5,  5min=1
+i_vcoSlowLen = int(math.max(3, math.round(14 / tf_mult)))   // 1min=14, 5min=3
+i_vcoThres   = input.float(0.4, "VCO Base Threshold", group=grp_vco, minval=0.2, maxval=0.8, step=0.05)
+i_cmpLen     = int(math.max(1, math.round(3  / tf_mult)))   // 1min=3,  5min=1
+i_cmpThres   = input.float(0.3, "CMP Threshold", group=grp_vco, minval=0.1, maxval=0.7, step=0.05)
+
+grp_knn = "── KNN ML Engine ──"
+i_knnOn      = input.bool(true,  "Enable KNN",       group=grp_knn)
+i_knnK       = input.int(6,      "K neighbours",     group=grp_knn, minval=3, maxval=20)
+i_p2BktMax   = int(math.round(50 / tf_mult))         // 1min=50, 5min=10
+i_ctMax      = int(math.round(60 / tf_mult))         // 1min=60, 5min=12
+i_tpAtr      = input.float(2.0,  "TP distance (ATR×)",  group=grp_knn, minval=0.5, maxval=5.0, step=0.5)
+i_slAtr      = input.float(1.0,  "SL distance (ATR×)",  group=grp_knn, minval=0.3, maxval=3.0, step=0.3)
+i_knnMinConf = input.float(0.10, "Min conf to predict", group=grp_knn, minval=0.0, maxval=0.5, step=0.05)
+i_knnMinQual = input.float(0.35, "Min quality label",   group=grp_knn, minval=0.2, maxval=0.7, step=0.05)
+i_knnEvery   = input.int(2,      "Run every N bars",    group=grp_knn, minval=1, maxval=5)
+i_knnStride  = input.int(2,      "Stride sampling",     group=grp_knn, minval=1, maxval=4)
+
+grp_bm = "── 🔥 BIG MOVE DETECTOR ──"
+i_bmEnable = input.bool(true, "Enable Big Move Detection", group=grp_bm)
+i_bmMinScore = input.int(2, "Min Score (2=Selective, 3=Very Selective)", group=grp_bm, minval=1, maxval=6)
+i_bmFlash = input.bool(true, "Flash Background on Extreme Moves", group=grp_bm)
+
+// ════════════════════════════════════════════════════════════════════
+// COLORS & POSITION
+// ════════════════════════════════════════════════════════════════════
+c_bull   = #00C076
+c_bear   = #FF3B30
+c_gold   = #FFD700
+c_orange = #FF8C00
+c_teal   = #00BCD4
+c_sub    = #888888
+c_bg     = #0D0D0D
+hudPos = i_hudPos == "Top Right"    ? position.top_right    :
+         i_hudPos == "Top Left"     ? position.top_left     :
+         i_hudPos == "Bottom Right" ? position.bottom_right : position.bottom_left
+hudSz  = i_hudSize == "Tiny"   ? size.tiny   : i_hudSize == "Normal" ? size.normal :
+         i_hudSize == "Large"  ? size.large  : size.small
+
+// Hull Moving Average helper
+f_hma(src, n) =>
+    int _sqn = math.round(math.sqrt(n))
+    ta.wma(2.0 * ta.wma(src, math.round(n / 2)) - ta.wma(src, n), math.max(_sqn, 2))
+// ════════════════════════════════════════════════════════════════════
+// SESSIONS & REGIMES
+// ════════════════════════════════════════════════════════════════════
+inAnySess   = true
+sessBlocked = false
+bestSess    = true
+sessBars    = 1
+sessDurMax  = 390
+_svSlot     = 0
+sessMult    = 1.0
+sessQuality = 1.0
+sessStr     = ""
+var float normATR  = 0.0
+var float normVol  = 0.0
+// ════════════════════════════════════════════════════════════════════
+// HURST EXPONENT
+// ════════════════════════════════════════════════════════════════════
+float h_range = ta.highest(high, i_hurstLen) - ta.lowest(low, i_hurstLen)
+float h_sumTr = math.sum(ta.tr(true), i_hurstLen)
+float hurstVal = h_range > 0 and h_sumTr > 0 ? 1.0 - (math.log(h_sumTr / h_range) / math.log(i_hurstLen)) : 0.5
+hurstVal := math.max(math.min(hurstVal, 1.0), 0.0)
+
+
+// ════════════════════════════════════════════════════════════════════
+// CORE INDICATORS
+// ════════════════════════════════════════════════════════════════════
+atr14 = ta.atr(14)
+volRatio = ta.sma(volume, 20) > 0 ? volume / ta.sma(volume, 20) : 1.0
+atrMA50  = ta.sma(atr14, 50)
+atrRatio = atrMA50 > 0 ? atr14 / atrMA50 : 1.0
+volMA20  = ta.sma(volume, 20)
+float atrStd50 = ta.stdev(atr14, 50)
+normATR := atrStd50 > 0 ? (atr14 - atrMA50) / atrStd50 : 0.0
+float _vol90 = ta.percentile_nearest_rank(volume, 50, 90)
+
+isInstVol = volume >= _vol90
+isHighVol = volRatio >= 1.5
+isLowVol  = volRatio < 0.8
+
+bodySize  = math.abs(close - open)
+fullRange = math.max(high - low, syminfo.mintick)
+bodyRatio = bodySize / fullRange
+dnWick    = close - low
+upWick    = high - close
+dnWickR   = fullRange > 0 ? dnWick / fullRange : 0.0
+upWickR   = fullRange > 0 ? upWick / fullRange : 0.0
+// ════════════════════════════════════════════════════════════════════
+// ADAPTIVE WILLIAMS %R EXHAUSTION (v14.4)
+// ════════════════════════════════════════════════════════════════════
+float wr14 = ta.wpr(14)                          // Williams %R: -100 (oversold) to 0 (overbought)
+float wrHiThres = math.max(math.min(-15.0 - normATR * 8.0, -10.0), -25.0)   // adaptive OB
+float wrLoThres = math.min(math.max(-85.0 + normATR * 8.0, -90.0), -75.0)   // adaptive OS
+bool  wrOverBought  = wr14 > wrHiThres
+bool  wrOverSold    = wr14 < wrLoThres
+string _arrWR = wrOverBought ? "▲" : wrOverSold ? "▼" : "─"
+// ════════════════════════════════════════════════════════════════════
+// ADAPTIVE Z-DELTA
+// ════════════════════════════════════════════════════════════════════
+int _zLen = 20
+delta_raw = volume * (2.0 * (close - low) / math.max(high - low, syminfo.mintick) - 1.0)
+deltaMean = ta.sma(delta_raw, _zLen)
+deltaStd  = ta.stdev(delta_raw, _zLen)
+zDelta    = deltaStd > 0 ? (delta_raw - deltaMean) / deltaStd : 0.0
+adaptZMin = i_zBase * (0.7 + atrRatio * 0.3)
+
+float _zWt = 1.0
+zEff  = zDelta * _zWt
+zBull = zEff >=  adaptZMin
+zBear = zEff <= -adaptZMin
+
+float _zRollRaw   = zEff * 3.0 + zEff[1] * 2.0 + zEff[2] * 1.0
+float _zRollThres = adaptZMin * 4.0
+bool  zRollBull   = _zRollRaw >  _zRollThres and zEff > 0 and zEff[1] > 0
+bool  zRollBear   = _zRollRaw < -_zRollThres and zEff < 0 and zEff[1] < 0
+
+zDivBull = close < close[1] and zDelta > 0.0 and zDelta > zDelta[1]
+zDivBear = close > close[1] and zDelta < 0.0 and zDelta < zDelta[1]
+
+absorpBull = isHighVol and close < open and bodyRatio < 0.35 and zDelta > 0
+absorpBear = isHighVol and close > open and bodyRatio < 0.35 and zDelta < 0
+
+// Normalises any series to approx [-1, +1] using rolling 50-bar mean/stdev.
+// Values beyond ±3σ are clamped so a single outlier cannot dominate distance.
+f_zscore(_val, _len) =>
+    float _m = ta.sma(_val, _len)
+    float _s = ta.stdev(_val, _len)
+    _s > 0.001 ? math.max(math.min((_val - _m) / _s, 3.0), -3.0) / 3.0 : 0.0
+
+//
+// ── PLACE ONCE, before line 1855 ──
+float _convictAdapt = i_minConvict
+_convictAdapt += hurstVal < 0.45 ? 8.0 : hurstVal > 0.60 ? -5.0 : 0.0
+_convictAdapt += atrRatio > 1.5  ? -4.0 : atrRatio < 0.7  ?  6.0 : 0.0
+_convictAdapt += sessQuality < 0.40 ? 5.0 : sessQuality > 0.85 ? -3.0 : 0.0
+_convictAdapt  := math.max(math.min(_convictAdapt, 72.0), 38.0)
+
+float _instMinAdapt = i_instFlowMin
+_instMinAdapt *= atrRatio > 1.4 ? 1.20 : atrRatio < 0.7 ? 0.80 : 1.0
+_instMinAdapt += hurstVal < 0.45 ? 5.0 : 0.0   // require stronger signal in chop
+_instMinAdapt  := math.max(math.min(_instMinAdapt, 70.0), 25.0)
+
+// Replace i_minConvict → _convictAdapt in longSig/shortSig lines 1855-1856 and 1984-1985
+// ════════════════════════════════════════════════════════════════════
+// IOFI
+// ════════════════════════════════════════════════════════════════════
+float _iofiRaw  = volume * (close - open) / math.max(fullRange, syminfo.mintick)
+float _iofiFast = f_hma(_iofiRaw, i_iofiLen)          // was ta.ema
+float _iofiSlow = f_hma(_iofiRaw, i_iofiLen * 2)      // was ta.ema
+float _iofiSig  = ta.ema(_iofiFast, i_iofiSmooth)
+float _iofiPeak = ta.highest(math.abs(_iofiFast), i_iofiLen * 3)
+float iofiNorm  = _iofiPeak > 0 ? math.max(math.min(_iofiFast / _iofiPeak, 1.0), -1.0) : 0.0
+float _iofiThresAdapt = math.max(math.min(i_iofiThres - normVol * 0.05, 0.80), 0.40)
+
+bool iofiBull      = iofiNorm >  _iofiThresAdapt
+bool iofiBear      = iofiNorm < -_iofiThresAdapt
+bool iofiBullCross = ta.crossover(iofiNorm,   _iofiThresAdapt)
+bool iofiBearCross = ta.crossunder(iofiNorm, -_iofiThresAdapt)
+bool iofiBreakoutBull = _iofiFast > _iofiSlow and iofiNorm > iofiNorm[1]
+bool iofiBreakoutBear = _iofiFast < _iofiSlow and iofiNorm < iofiNorm[1]
+bool iofiDivBull   = close < close[1] and _iofiFast > 0.0 and _iofiFast > _iofiFast[1]
+bool iofiDivBear   = close > close[1] and _iofiFast < 0.0 and _iofiFast < _iofiFast[1]
+
+// ════════════════════════════════════════════════════════════════════
+// VCO
+// ════════════════════════════════════════════════════════════════════
+float _vcoRaw  = volume * (close - open) / math.max(high - low, syminfo.mintick)
+float _vcoFast = f_hma(_vcoRaw, i_vcoFastLen)         // was ta.ema
+float _vcoSlow = f_hma(_vcoRaw, i_vcoSlowLen)         // was ta.ema
+float _vcoDiff = _vcoFast - _vcoSlow
+float _vcoPeak = ta.highest(math.abs(_vcoDiff), i_vcoSlowLen * 2)
+float vcoNorm  = _vcoPeak > 0 ? math.max(math.min(_vcoDiff / _vcoPeak, 1.0), -1.0) : 0.0
+
+float _vcoThresAdapt = math.max(math.min(i_vcoThres * (atrRatio > 1.3 ? 1.25 : atrRatio < 0.7 ? 0.75 : 1.0), 0.75), 0.20)
+
+bool vcoBull      = vcoNorm >  _vcoThresAdapt
+bool vcoBear      = vcoNorm < -_vcoThresAdapt
+bool vcoBullCross = ta.crossover(vcoNorm,   _vcoThresAdapt)
+bool vcoBearCross = ta.crossunder(vcoNorm, -_vcoThresAdapt)
+bool vcoNeutral   = not vcoBull and not vcoBear
+
+// ════════════════════════════════════════════════════════════════════
+// CMP
+// ════════════════════════════════════════════════════════════════════
+float _cmpRaw   = (iofiNorm + vcoNorm) / 2.0
+float _cmpAccel = _cmpRaw - nz(_cmpRaw[i_cmpLen], _cmpRaw)
+float _cmpPeak  = ta.highest(math.abs(_cmpAccel), 20)
+float cmpNorm   = _cmpPeak > 0 ? math.max(math.min(_cmpAccel / _cmpPeak, 1.0), -1.0) : 0.0
+
+bool cmpBull      = cmpNorm >  i_cmpThres and _cmpAccel > 0
+bool cmpBear      = cmpNorm < -i_cmpThres and _cmpAccel < 0
+bool cmpBullCross = ta.crossover(cmpNorm,   i_cmpThres)
+bool cmpBearCross = ta.crossunder(cmpNorm, -i_cmpThres)
+bool cmpDivBull   = close < close[1] and cmpBull and cmpNorm > cmpNorm[1]
+bool cmpDivBear   = close > close[1] and cmpBear and cmpNorm < cmpNorm[1]
+
+// ════════════════════════════════════════════════════════════════════
+// VolVCO
+// ════════════════════════════════════════════════════════════════════
+float _volVcoRaw = f_hma(atr14, i_vcoFastLen) - f_hma(atr14, i_vcoSlowLen)  // was ta.ema pair
+float _volVcoPeak  = ta.highest(math.abs(_volVcoRaw), i_vcoSlowLen * 2)
+float volVcoNorm   = _volVcoPeak > 0 ? math.max(math.min(_volVcoRaw / _volVcoPeak, 1.0), -1.0) : 0.0
+float _volVcoRoc   = volVcoNorm - nz(volVcoNorm[3], volVcoNorm)
+float volVcoRocN   = math.max(math.min(_volVcoRoc / 0.4, 1.0), -1.0)
+
+bool volVcoExpanding = volVcoNorm > 0.0 and volVcoNorm > volVcoNorm[1]
+bool volVcoCompress  = volVcoNorm < -0.1
+bool volVcoBullCross = ta.crossover(volVcoNorm, 0.0)
+bool volVcoBearCross = ta.crossunder(volVcoNorm, 0.0)
+bool volVcoBullConf  = volVcoExpanding and (cmpBull or iofiBull)
+bool volVcoBearConf  = not volVcoExpanding and not volVcoCompress and (cmpBear or iofiBear)
+
+
+// ════════════════════════════════════════════════════════════════════
+// STRUCTURE
+// ════════════════════════════════════════════════════════════════════
+swLen = 5
+phH   = ta.pivothigh(high, swLen, swLen)
+phL   = ta.pivotlow (low,  swLen, swLen)
+
+var float pH1 = na, var float pH2 = na
+var float pL1 = na, var float pL2 = na
+if not na(phH)
+    pH2 := pH1
+    pH1 := phH
+if not na(phL)
+    pL2 := pL1
+    pL1 := phL
+
+bullBOS = not na(pH1) and close > pH1 and close[1] <= pH1
+bearBOS = not na(pL1) and close < pL1 and close[1] >= pL1
+bullMSS = bullBOS and not na(pL1) and low[1] < pL1
+bearMSS = bearBOS and not na(pH1) and high[1] > pH1
+
+var int tDir = 0
+if bullBOS
+    tDir := 1
+if bearBOS
+    tDir := -1
+var int _lastBOSBar = 0
+if bullBOS or bearBOS
+    _lastBOSBar := bar_index
+trendUp   = tDir == 1
+trendDown = tDir == -1
+
+eqlTolVal = math.max(close * i_eqlTol / 100.0, atr14 * 0.1)
+eqh = not na(pH1) and not na(pH2) and math.abs(pH1 - pH2) <= eqlTolVal
+eql = not na(pL1) and not na(pL2) and math.abs(pL1 - pL2) <= eqlTolVal
+
+[pdH, pdL] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+pdClose = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_off)
+nearPDH = not na(pdH) and math.abs(high - pdH) <= atr14 * 0.4
+nearPDL = not na(pdL) and math.abs(low  - pdL) <= atr14 * 0.4
+
+[pwH, pwL] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+[pmH, pmL] = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead=barmerge.lookahead_off)
+
+nearPWH = not na(pwH) and math.abs(high - pwH) <= atr14 * 1.0
+nearPWL = not na(pwL) and math.abs(low  - pwL) <= atr14 * 1.0
+nearPMH = not na(pmH) and math.abs(high - pmH) <= atr14 * 2.0
+nearPML = not na(pmL) and math.abs(low  - pmL) <= atr14 * 2.0
+
+float _distToPWH = not na(pwH) ? math.abs(high - pwH) / math.max(atr14, syminfo.mintick) : 99.0
+float _distToPWL = not na(pwL) ? math.abs(low  - pwL) / math.max(atr14, syminfo.mintick) : 99.0
+float _distToPMH = not na(pmH) ? math.abs(high - pmH) / math.max(atr14, syminfo.mintick) : 99.0
+float _distToPML = not na(pmL) ? math.abs(low  - pmL) / math.max(atr14, syminfo.mintick) : 99.0
+
+float _distToAllPools = math.min(
+     not na(pdH) ? math.abs(high - pdH) / math.max(atr14, syminfo.mintick) : 99.0,
+     math.min(not na(pdL) ? math.abs(low  - pdL) / math.max(atr14, syminfo.mintick) : 99.0,
+     math.min(_distToPWH, math.min(_distToPWL, math.min(_distToPMH, _distToPML)))))
+
+float htfPoolBullTP = not na(pwH) and pwH > close ? pwH : not na(pmH) and pmH > close ? pmH : not na(pdH) and pdH > close ? pdH : close + atr14 * i_tpAtr
+float htfPoolBearTP = not na(pwL) and pwL < close ? pwL : not na(pmL) and pmL < close ? pmL : not na(pdL) and pdL < close ? pdL : close - atr14 * i_tpAtr
+
+[htf15_emaF, htf15_emaS] = request.security(syminfo.tickerid, "15", [ta.ema(close, 9), ta.ema(close, 21)], lookahead=barmerge.lookahead_off)
+htf15Up = htf15_emaF > htf15_emaS
+htf15Dn = htf15_emaF < htf15_emaS
+htfBull = htf15Up
+htfBear = htf15Dn
+
+
+[htf15_obHigh2, htf15_obLow2] = request.security(syminfo.tickerid, "15", [ta.highest(high, 5)[1], ta.lowest(low, 5)[1]], lookahead=barmerge.lookahead_off)
+
+//[htf5_vsaSpread,  htf5_vsaSpreadMA,  htf5_volR,  htf5_closePos,  htf5_bodyR]  = request.security(syminfo.tickerid, "5",  [high - low, ta.sma(high - low, 14), ta.sma(volume, 14) > 0 ? volume / ta.sma(volume, 14) : 1.0, (high - low) > 0 ? (close - low) / (high - low) : 0.5, (high - low) > 0 ? math.abs(close - open) / (high - low) : 0.5], lookahead=barmerge.lookahead_off)
+[htf15_vsaSpread, htf15_vsaSpreadMA, htf15_volR, htf15_closePos, htf15_bodyR] = request.security(syminfo.tickerid, "15", [high - low, ta.sma(high - low, 14), ta.sma(volume, 14) > 0 ? volume / ta.sma(volume, 14) : 1.0, (high - low) > 0 ? (close - low) / (high - low) : 0.5, (high - low) > 0 ? math.abs(close - open) / (high - low) : 0.5], lookahead=barmerge.lookahead_off)
+[tf5_hmaF, tf5_hmaS, tf5_bBOS, tf5_brBOS,c5_o0, c5_h0, c5_l0, c5_c0, c5_v0, c5_o1, c5_h1, c5_l1, c5_c1, c5_v1, c5_volMA, htf5_obHigh, htf5_obLow] = request.security(syminfo.tickerid, "5", [ta.hma(close,9), ta.hma(close,21), ta.crossover(close, ta.highest(high[1],10)), ta.crossunder(close, ta.lowest(low[1],10)), open, high, low, close, volume, open[1], high[1], low[1], close[1], volume[1], ta.sma(volume,20), ta.highest(high,5)[1], ta.lowest(low,5)[1]], lookahead=barmerge.lookahead_off)
+
+[htf5_vsaSpread, htf5_vsaSpreadMA, htf5_volR, htf5_closePos, htf5_bodyR] = request.security(syminfo.tickerid, "5", [high - low, ta.sma(high - low,14), ta.sma(volume,14)>0?volume/ta.sma(volume,14):1.0, (high-low)>0?(close-low)/(high-low):0.5, (high-low)>0?math.abs(close-open)/(high-low):0.5], lookahead=barmerge.lookahead_off)
+f_vsaInt(_spread, _spreadMA, _volR, _closePos, _bodyR) =>
+    bool _narrow = _spread  < _spreadMA * 0.70
+    bool _wide   = _spread  > _spreadMA * 1.40
+    bool _upBar  = _closePos > 0.50 and _bodyR > 0.05
+    bool _dnBar  = _closePos < 0.50
+    bool _nd = _narrow and _upBar and _volR < 0.80
+    bool _ns = _narrow and _dnBar and _volR < 0.80
+    bool _sv = _wide   and _dnBar and _closePos >= 0.40 and _volR >= 1.50
+    bool _ef = _wide   and _bodyR  < 0.25 and _volR >= 1.50
+    _sv ? 2 : _ns ? 1 : _nd ? -1 : _ef ? (_closePos > 0.50 ? -2 : 2) : 0
+
+int vsaInt_5m  = f_vsaInt(htf5_vsaSpread,  htf5_vsaSpreadMA,  htf5_volR,  htf5_closePos,  htf5_bodyR)
+int vsaInt_15m = f_vsaInt(htf15_vsaSpread, htf15_vsaSpreadMA, htf15_volR, htf15_closePos, htf15_bodyR)
+
+float _vsaSpread   = high - low
+float _vsaSpreadMA = ta.sma(_vsaSpread, 14)
+float _vsaClosePos = _vsaSpread > 0 ? (close - low) / _vsaSpread : 0.5
+
+bool vsaNoDemand   = _vsaSpread < _vsaSpreadMA*0.7 and close > open   and _vsaClosePos < 0.50 and volRatio < 0.8
+bool vsaNoSupply   = _vsaSpread < _vsaSpreadMA*0.7 and close < open   and _vsaClosePos > 0.50 and volRatio < 0.8
+bool vsaStopVol    = _vsaSpread > _vsaSpreadMA*1.4 and close < open   and _vsaClosePos >= 0.40 and volRatio >= 1.5
+bool vsaEffortFail = volRatio >= 1.5 and bodyRatio < 0.25 and _vsaSpread > _vsaSpreadMA*1.4
+
+int vsaInt1m = vsaStopVol ? 2 : vsaNoSupply ? 1 : vsaNoDemand ? -1 : vsaEffortFail ? (close >= open ? -2 : 2) : 0
+float _qf_vsa = vsaInt1m / 2.0
+
+int vsaTFConfBull = (vsaInt1m > 0 ? 1 : 0) + (vsaInt_5m > 0 ? 1 : 0) + (vsaInt_15m > 0 ? 1 : 0)
+int vsaTFConfBear = (vsaInt1m < 0 ? 1 : 0) + (vsaInt_5m < 0 ? 1 : 0) + (vsaInt_15m < 0 ? 1 : 0)
+bool vsaBullActive = vsaTFConfBull > 0 and vsaTFConfBull > vsaTFConfBear
+bool vsaBearActive = vsaTFConfBear > 0 and vsaTFConfBear > vsaTFConfBull
+int  vsaTFCount    = vsaBullActive ? vsaTFConfBull : vsaBearActive ? vsaTFConfBear : 0
+
+int  _vsaDispInt      = vsaInt1m != 0 ? vsaInt1m : vsaInt_5m != 0 ? vsaInt_5m : vsaInt_15m
+string vsaPatternName = _vsaDispInt == 2 ? "Stop Vol" : _vsaDispInt == 1 ? "NS" : _vsaDispInt == -1 ? "ND" : _vsaDispInt == -2 ? "Effort≠Res" : "─"
+
+var string[] activeTFs = array.new_string(0)
+array.clear(activeTFs)
+if vsaInt1m != 0
+    array.push(activeTFs, "1m")
+if vsaInt_5m != 0
+    bool _5mAgrees = vsaInt1m == 0 or (vsaInt_5m > 0 and vsaInt1m > 0) or (vsaInt_5m < 0 and vsaInt1m < 0)
+    if _5mAgrees
+        array.push(activeTFs, "5m")
+if vsaInt_15m != 0
+    bool _15mAgrees = vsaInt1m == 0 or (vsaInt_15m > 0 and vsaInt1m > 0) or (vsaInt_15m < 0 and vsaInt1m < 0)
+    if _15mAgrees
+        array.push(activeTFs, "15m")
+string vsaTFTag = array.join(activeTFs, "+")
+
+color vsaRowBG  = vsaBullActive and vsaTFCount == 3 ? color.new(#042C53, 0) : vsaBullActive and vsaTFCount == 2 ? color.new(#0C447C, 0) : vsaBullActive and vsaTFCount == 1 ? color.new(#185FA5, 30) : vsaBearActive and vsaTFCount == 3 ? color.new(#501313, 0) : vsaBearActive and vsaTFCount == 2 ? color.new(#791F1F, 0) : vsaBearActive and vsaTFCount == 1 ? color.new(#A32D2D, 30) : color.new(c_bg, 0)
+color vsaTextCol = vsaBullActive and vsaTFCount >= 2 ? color.new(#B5D4F4, 0) : vsaBullActive and vsaTFCount == 1 ? color.new(#378ADD, 0) : vsaBearActive and vsaTFCount >= 2 ? color.new(#F7C1C1, 0) : vsaBearActive and vsaTFCount == 1 ? color.new(#E24B4A, 0) : color.new(c_sub, 0)
+string vsaValStr = vsaPatternName + "  " + vsaTFTag + "  [5m:" + str.tostring(vsaInt_5m) + " 15m:" + str.tostring(vsaInt_15m) + "]"
+
+// ════════════════════════════════════════════════════════════════════
+// VOLUME OB & FVG
+// ════════════════════════════════════════════════════════════════════
+var float[] ob_top  = array.new_float()
+var float[] ob_bot  = array.new_float()
+var bool[]  ob_bull = array.new_bool()
+var float[] ob_volR = array.new_float()
+var bool[]  ob_mit  = array.new_bool()
+var int[]   ob_bar  = array.new_int()
+var box[]   ob_bx   = array.new_box()
+
+if bullBOS and volume[swLen] >= _vol90[swLen] and open[swLen] > close[swLen]
+    _t = math.max(open[swLen], close[swLen]), _b = math.min(open[swLen], close[swLen])
+    array.push(ob_top, _t), array.push(ob_bot, _b), array.push(ob_bull, true), array.push(ob_volR, volRatio[swLen]), array.push(ob_mit, false), array.push(ob_bar, bar_index - swLen)
+    box _obBullBx = box.new(bar_index - swLen, _t, bar_index + i_obExtend, _b, border_color=color.new(c_bull, 15), border_width=2, bgcolor=color.new(c_bull, 87))
+    array.push(ob_bx, _obBullBx)
+    if array.size(ob_bx) > i_obMaxCount
+        box.delete(array.shift(ob_bx)), array.shift(ob_top), array.shift(ob_bot), array.shift(ob_bull), array.shift(ob_volR), array.shift(ob_mit), array.shift(ob_bar)
+
+if bearBOS and volume[swLen] >= _vol90[swLen] and open[swLen] < close[swLen]
+    _t = math.max(open[swLen], close[swLen]), _b = math.min(open[swLen], close[swLen])
+    array.push(ob_top, _t), array.push(ob_bot, _b), array.push(ob_bull, false), array.push(ob_volR, volRatio[swLen]), array.push(ob_mit, false), array.push(ob_bar, bar_index - swLen)
+    box _obBearBx = box.new(bar_index - swLen, _t, bar_index + i_obExtend, _b, border_color=color.new(c_bear, 15), border_width=2, bgcolor=color.new(c_bear, 87))
+    array.push(ob_bx, _obBearBx)
+    if array.size(ob_bx) > i_obMaxCount
+        box.delete(array.shift(ob_bx)), array.shift(ob_top), array.shift(ob_bot), array.shift(ob_bull), array.shift(ob_volR), array.shift(ob_mit), array.shift(ob_bar)
+
+bool inBullOB=false, bool inBearOB=false, float nearestBullOB=na, float nearestBearOB=na, bool freshBullOB=false, bool freshBearOB=false
+float obStrengthLong=0.0, float obStrengthShort=0.0, bool obRejectionBull=false, bool obRejectionBear=false
+
+if array.size(ob_bx) > 0
+    for i = array.size(ob_bx) - 1 to 0
+        bool _isB = array.get(ob_bull, i), float _t = array.get(ob_top, i), float _b = array.get(ob_bot, i), bool _mit = array.get(ob_mit, i), int _obBr = array.get(ob_bar, i)
+        box _bx = array.get(ob_bx, i)
+        bool _fresh = (bar_index - _obBr) <= i_obFreshBars
+        if not _mit
+            box.set_right(_bx, bar_index + i_obExtend)
+            if _isB and close < _b and isHighVol
+                array.set(ob_mit, i, true), box.set_bgcolor(_bx, color.new(c_bull, 97)), box.set_border_color(_bx, color.new(c_bull, 70))
+            else if not _isB and close > _t and isHighVol
+                array.set(ob_mit, i, true), box.set_bgcolor(_bx, color.new(c_bear, 97)), box.set_border_color(_bx, color.new(c_bear, 70))
+            else
+                if _isB and low <= _t and high >= _b
+                    inBullOB := true, nearestBullOB := _t, freshBullOB := _fresh
+                if not _isB and high >= _b and low <= _t
+                    inBearOB := true, nearestBearOB := _b, freshBearOB := _fresh
+                float _obScr = math.min((array.get(ob_volR, i) >= 4.0 ? 9.0 : array.get(ob_volR, i) >= 3.0 ? 6.0 : 3.0) + (_fresh ? 1.0 : 0.0), 10.0)
+                if _isB
+                    if inBullOB
+                        obStrengthLong := math.max(obStrengthLong, _obScr)
+                    if low <= _t and close > _t and not inBullOB
+                        obRejectionBull := true
+                else
+                    if inBearOB
+                        obStrengthShort := math.max(obStrengthShort, _obScr)
+                    if high >= _b and close < _b and not inBearOB
+                        obRejectionBear := true
+
+distBullOB = not na(nearestBullOB) ? math.abs(close - nearestBullOB) / atr14 : 99.0
+distBearOB = not na(nearestBearOB) ? math.abs(close - nearestBearOB) / atr14 : 99.0
+nearBullOB = distBullOB < 2.0 and not inBullOB
+nearBearOB = distBearOB < 2.0 and not inBearOB
+
+var float[] fvg_top = array.new_float(), var float[] fvg_bot = array.new_float(), var bool[] fvg_bull = array.new_bool(), var int[] fvg_scr = array.new_int(), var bool[] fvg_fill = array.new_bool(), var box[] fvg_bx = array.new_box()
+_bullFVG = low > high[2] and (low - high[2]) >= atr14 * i_fvgMinSz
+_bearFVG = high < low[2] and (low[2] - high) >= atr14 * i_fvgMinSz
+
+f_fvgScore(_vol, _htfAligned, _atOB, _inSess, _bestSess, _ageBars) =>
+    (_vol >= 2.0 ? 3 : _vol >= 1.5 ? 2 : _vol >= 1.0 ? 1 : 0) + (_atOB ? 2 : 0) + (_htfAligned ? 2 : 0) + (_inSess ? 1 : 0) + (_bestSess ? 1 : 0) + (_ageBars > 10 ? 1 : 0)
+
+_bFVGScr  = f_fvgScore(volRatio[1], htf15Up, inBullOB, inAnySess, bestSess, sessBars)
+_brFVGScr = f_fvgScore(volRatio[1], htf15Dn, inBearOB, inAnySess, bestSess, sessBars)
+
+if i_fvgShow and _bullFVG and _bFVGScr >= i_fvgMinScr
+    array.push(fvg_top, low), array.push(fvg_bot, high[2]), array.push(fvg_bull, true), array.push(fvg_scr, _bFVGScr), array.push(fvg_fill, false)
+    array.push(fvg_bx, box.new(bar_index - 2, low, bar_index + 30, high[2], border_color=color.new(c_bull, 50), border_width=1, bgcolor=(_bFVGScr >= 7 ? color.new(c_bull, 80) : _bFVGScr >= 4 ? color.new(c_bull, 88) : color.new(c_bull, 93))))
+    if array.size(fvg_bx) > 15
+        box.delete(array.shift(fvg_bx)), array.shift(fvg_top), array.shift(fvg_bot), array.shift(fvg_bull), array.shift(fvg_scr), array.shift(fvg_fill)
+
+if i_fvgShow and _bearFVG and _brFVGScr >= i_fvgMinScr
+    array.push(fvg_top, low[2]), array.push(fvg_bot, high), array.push(fvg_bull, false), array.push(fvg_scr, _brFVGScr), array.push(fvg_fill, false)
+    array.push(fvg_bx, box.new(bar_index - 2, low[2], bar_index + 30, high, border_color=color.new(c_bear, 50), border_width=1, bgcolor=(_brFVGScr >= 7 ? color.new(c_bear, 80) : _brFVGScr >= 4 ? color.new(c_bear, 88) : color.new(c_bear, 93))))
+    if array.size(fvg_bx) > 15
+        box.delete(array.shift(fvg_bx)), array.shift(fvg_top), array.shift(fvg_bot), array.shift(fvg_bull), array.shift(fvg_scr), array.shift(fvg_fill)
+
+bool inBullFVG=false, bool inBearFVG=false, int bestBFVGScr=0, int bestBrFVGScr=0
+if array.size(fvg_bx) > 0
+    for i = array.size(fvg_bx) - 1 to 0
+        if not array.get(fvg_fill, i)
+            box.set_right(array.get(fvg_bx, i), bar_index + 30)
+            if array.get(fvg_bull, i)
+                if low <= array.get(fvg_top, i) and high >= array.get(fvg_bot, i)
+                    inBullFVG := true, bestBFVGScr := math.max(bestBFVGScr, array.get(fvg_scr, i))
+                if close < array.get(fvg_bot, i)
+                    array.set(fvg_fill, i, true), box.set_bgcolor(array.get(fvg_bx, i), color.new(c_bull, 97))
+            else
+                if high >= array.get(fvg_bot, i) and low <= array.get(fvg_top, i)
+                    inBearFVG := true, bestBrFVGScr := math.max(bestBrFVGScr, array.get(fvg_scr, i))
+                if close > array.get(fvg_top, i)
+                    array.set(fvg_fill, i, true), box.set_bgcolor(array.get(fvg_bx, i), color.new(c_bear, 97))
+
+// ════════════════════════════════════════════════════════════════════
+// SL HUNT DETECTION
+// ════════════════════════════════════════════════════════════════════
+stopRunBull   = dnWickR >= i_wickR and isHighVol and not na(pL1) and low < pL1 and close > pL1
+stopRunBear   = upWickR >= i_wickR and isHighVol and not na(pH1) and high > pH1 and close < pH1
+fakeBreakBull = not na(pH1) and close > pH1 and isLowVol
+fakeBreakBear = not na(pL1) and close < pL1 and isLowVol
+
+bool hg1Bull = not na(pL1) or eql or nearPDL
+bool hg1Bear = not na(pH1) or eqh or nearPDH
+bool hg2Bull = hg1Bull and not na(pL1) and (low  - pL1) < atr14 * 0.8
+bool hg2Bear = hg1Bear and not na(pH1) and (pH1  - high) < atr14 * 0.8
+bool hg3Bull = hg2Bull and isHighVol
+bool hg3Bear = hg2Bear and isHighVol
+bool hg4Bull = hg3Bull and (stopRunBull or fakeBreakBull or (dnWickR >= i_wickR and isHighVol))
+bool hg4Bear = hg3Bear and (stopRunBear or fakeBreakBear or (upWickR >= i_wickR and isHighVol))
+bool hg5Bull = hg4Bull and (zBull or absorpBull or zDivBull)
+bool hg5Bear = hg4Bear and (zBear or absorpBear or zDivBear)
+
+huntDangerBull = hg3Bull and (stopRunBull or fakeBreakBull or (dnWickR >= i_wickR and isHighVol))
+huntDangerBear = hg3Bear and (stopRunBear or fakeBreakBear or (upWickR >= i_wickR and isHighVol))
+huntDoneBull   = huntDangerBull[1] and close > open and zBull
+huntDoneBear   = huntDangerBear[1] and close < open and zBear
+
+//float huntProbLong  = hg5Bull ? 88.0 : hg4Bull ? 68.0 : hg3Bull ? 48.0 : hg2Bull ? 28.0 : hg1Bull ? 14.0 : 0.0
+//float huntProbShort = hg5Bear ? 88.0 : hg4Bear ? 68.0 : hg3Bear ? 48.0 : hg2Bear ? 28.0 : hg1Bear ? 14.0 : 0.0
+
+float _distToEQH = not na(pH1) and eqh ? math.abs(high - pH1) / math.max(atr14, syminfo.mintick) : 99.0
+float _distToEQL = not na(pL1) and eql ? math.abs(low  - pL1) / math.max(atr14, syminfo.mintick) : 99.0
+float _nearestPool = math.min(_distToEQH, math.min(_distToEQL, _distToAllPools))
+float _qfPoolDist = math.min(_nearestPool, 5.0) / 5.0                  // Hunt zone quality — bounded 0–1
+bool inHuntZone    = _nearestPool < i_huntProxATR and not huntDangerBull and not huntDangerBear and not huntDoneBull and not huntDoneBear
+bool huntApproaching = _nearestPool < (i_huntProxATR * 3.0) and _nearestPool >= i_huntProxATR and not huntDangerBull and not huntDangerBear and not huntDoneBull and not huntDoneBear
+
+var int _postSweepBarsL = 0
+var int _postSweepBarsS = 0
+_postSweepBarsL := huntDoneBull ? 1 : (_postSweepBarsL > 0 and _postSweepBarsL <= i_postSweepBars) ? _postSweepBarsL + 1 : 0
+_postSweepBarsS := huntDoneBear ? 1 : (_postSweepBarsS > 0 and _postSweepBarsS <= i_postSweepBars) ? _postSweepBarsS + 1 : 0
+bool inPostSweepWindowL = _postSweepBarsL > 0 and _postSweepBarsL <= i_postSweepBars
+bool inPostSweepWindowS = _postSweepBarsS > 0 and _postSweepBarsS <= i_postSweepBars
+
+float _qf_huntZone = inHuntZone ? 1.0 : huntDangerBull or huntDangerBear ? 0.8 : (inPostSweepWindowL or inPostSweepWindowS) ? 0.0 : 0.4
+
+
+// ════════════════════════════════════════════════════════════════════
+// COMPOSITE POOL SCORE — stop cluster density (0-150)
+// Stacks every known retail stop placement type at the same level
+// ════════════════════════════════════════════════════════════════════
+
+// Round number detector — adapts step to instrument price scale
+float _rnStep    = close >= 10000 ? 500.0 : close >= 1000 ? 100.0 : close >= 100 ? 50.0 : close >= 10 ? 5.0 : 1.0
+float _rnNearest = math.round(close / _rnStep) * _rnStep
+float _rnDist    = math.abs(close - _rnNearest) / math.max(atr14, syminfo.mintick)
+bool  _nearRound = _rnDist < 0.20                           // within 0.2 ATR of round number
+
+// Dwell time counter — bars price has spent near the pool (stop accumulation proxy)
+// Bears dwell above pL1; bulls dwell below pH1
+var int _dwellAbovePL1 = 0
+var int _dwellBelowPH1 = 0
+_dwellAbovePL1 := not na(pL1) and close > pL1 and (close - pL1) < atr14 ? _dwellAbovePL1 + 1 : 0
+_dwellBelowPH1 := not na(pH1) and close < pH1 and (pH1 - close) < atr14 ? _dwellBelowPH1 + 1 : 0
+
+// OB lower boundary proximity to pool level
+float _obBotL = not na(nearestBullOB) ? nearestBullOB : na   // bull OB lower edge near pL1
+bool  _obNearPoolL = not na(_obBotL) and not na(pL1) and math.abs(_obBotL - pL1) < atr14 * 0.3
+bool  _obNearPoolS = not na(nearestBearOB) and not na(pH1)  and math.abs(nearestBearOB - pH1) < atr14 * 0.3
+
+// FVG boundary proximity to pool level
+float _fvgPoolDistL = not na(pL1) and inBullFVG ? math.abs(close - pL1) / math.max(atr14, syminfo.mintick) : 99.0
+float _fvgPoolDistS = not na(pH1)  and inBearFVG ? math.abs(close - pH1) / math.max(atr14, syminfo.mintick) : 99.0
+bool  _fvgNearPoolL = _fvgPoolDistL < 0.30
+bool  _fvgNearPoolS = _fvgPoolDistS < 0.30
+
+// Composite pool score — long side (stop cluster below price)
+float _poolScoreL =
+     (eql                           ? 25.0 : 0.0) +   // EQL = primary stop cluster
+     (eql and not na(pL1)           ? 15.0 : 0.0) +   // swing low stacking with EQL
+     (_nearRound                    ? 15.0 : 0.0) +   // round number adds crowd stops
+     (_obNearPoolL                  ? 10.0 : 0.0) +   // OB lower boundary = retail entry stop
+     (_fvgNearPoolL                 ? 10.0 : 0.0) +   // FVG boundary = FVG-fill trader stop
+     (nearPDL or nearPWL            ? 10.0 : 0.0) +   // HTF level adds algo stops
+     (_dwellAbovePL1 >= 8           ? 10.0 : _dwellAbovePL1 >= 4 ? 5.0 : 0.0) + // dwell = stop buildup
+     (iofiDivBear and inHuntZone    ? 20.0 : 0.0) +   // inst diverging = positioning to sweep
+     (volVcoCompress and _dwellAbovePL1 >= 5 ? 15.0 : 0.0)  // coiling at pool = pre-sweep
+
+// Composite pool score — short side (stop cluster above price)
+float _poolScoreS =
+     (eqh                           ? 25.0 : 0.0) +
+     (eqh and not na(pH1)           ? 15.0 : 0.0) +
+     (_nearRound                    ? 15.0 : 0.0) +
+     (_obNearPoolS                  ? 10.0 : 0.0) +
+     (_fvgNearPoolS                 ? 10.0 : 0.0) +
+     (nearPDH or nearPWH            ? 10.0 : 0.0) +
+     (_dwellBelowPH1 >= 8           ? 10.0 : _dwellBelowPH1 >= 4 ? 5.0 : 0.0) +
+     (iofiDivBull and inHuntZone    ? 20.0 : 0.0) +
+     (volVcoCompress and _dwellBelowPH1 >= 5 ? 15.0 : 0.0)
+
+// Active pool score — whichever side is more loaded
+float _poolScore    = math.max(_poolScoreL, _poolScoreS)
+bool  _poolScoreHi  = _poolScore >= 80.0
+bool  _poolScoreMax = _poolScore >= 110.0
+
+float _hurstHuntScale = hurstVal > 0.60 ? 1.12 : hurstVal < 0.45 ? 0.82 : 1.0
+float _poolBoost = _poolScoreMax ? 1.08 : _poolScoreHi ? 1.04 : 1.0
+float huntProbLong  = math.min((hg5Bull?88.:hg4Bull?68.:hg3Bull?48.:hg2Bull?28.:hg1Bull?14.:0.) 
+                               * _hurstHuntScale * _poolBoost, 100.)
+float huntProbShort = math.min((hg5Bear?88.:hg4Bear?68.:hg3Bear?48.:hg2Bear?28.:hg1Bear?14.:0.) 
+                               * _hurstHuntScale * _poolBoost, 100.)
+// Density label — qualitative descriptor, not a fake probability
+// Shown alongside hg% (which IS calibrated) so trader sees both
+string _poolDensity = _poolScoreMax ? "Packed ⚡" : _poolScoreHi ? "Dense ★" :
+                      _poolScore >= 41 ? "Loaded" : _poolScore > 0 ? "Thin" : ""
+
+//// Compact display strings for Signal row
+string _rnTag    = _nearRound ? "R"+str.tostring(math.round(_rnNearest)) : ""
+string _dwellTag = _dwellAbovePL1 >= 4 ? "D:"+str.tostring(_dwellAbovePL1)+"b" :
+                     _dwellBelowPH1 >= 4 ? "D:"+str.tostring(_dwellBelowPH1)+"b" : ""
+// Pool flag: density label + round number + dwell time — no raw score shown
+string _poolFlag = _poolDensity + (_rnTag!=""?"  "+_rnTag:"") + (_dwellTag!=""?"  "+_dwellTag:"")
+
+// Exact stop level being targeted during sweep
+float _sweepTargetL = eql ? pL1 : not na(pL1) ? pL1 : na
+float _sweepTargetS = eqh ? pH1 : not na(pH1) ? pH1 : na
+
+var float _sweepWickLow = na, var float _sweepWickHigh = na
+if huntDangerBull
+    _sweepWickLow := low
+if huntDangerBear
+    _sweepWickHigh := high
+if bar_index - _lastBOSBar > 10
+    _sweepWickLow := na, _sweepWickHigh := na
+
+bool _zdFlipBull = zDelta > 0.3 and (zDelta[2] < -0.2 or zDelta[3] < -0.2)
+bool _zdFlipBear = zDelta < -0.3 and (zDelta[2] > 0.2 or zDelta[3] > 0.2)
+bool _absorbNearSweepL = absorpBull or absorpBull[1] or absorpBull[2]
+bool _absorbNearSweepS = absorpBear or absorpBear[1] or absorpBear[2]
+bool _iofiConfL = iofiBullCross or iofiBullCross[1] or iofiBullCross[2] or (iofiBull and iofiNorm > iofiNorm[1]) or vcoBullCross or vcoBullCross[1] or (vcoBull and vcoNorm > vcoNorm[1] and vcoNorm > _vcoThresAdapt + 0.1) or cmpBull or cmpBullCross or cmpDivBull or volVcoBullCross or volVcoBullConf
+bool _iofiConfS = iofiBearCross or iofiBearCross[1] or iofiBearCross[2] or (iofiBear and iofiNorm < iofiNorm[1]) or vcoBearCross or vcoBearCross[1] or (vcoBear and vcoNorm < vcoNorm[1] and vcoNorm < -(_vcoThresAdapt + 0.1)) or cmpBear or cmpBearCross or cmpDivBear or volVcoBearCross or volVcoBearConf
+bool _volExpL = close > open and volRatio >= 1.5
+bool _volExpS = close < open and volRatio >= 1.5
+
+float c5_body0 = math.abs(c5_c0 - c5_o0), float c5_rng0  = math.max(c5_h0 - c5_l0, syminfo.mintick)
+bool  c5_bull0 = c5_c0 > c5_o0, bool  c5_bear0 = c5_c0 < c5_o0
+bool  c5_bull1 = c5_c1 > c5_o1, bool  c5_bear1 = c5_c1 < c5_o1
+float c5_vRat0 = c5_volMA > 0 ? c5_v0 / c5_volMA : 1.0
+float c5_closePos0 = c5_rng0 > 0 ? (c5_c0 - c5_l0) / c5_rng0 : 0.5
+float c5_dnWick0 = math.max(math.min(c5_o0, c5_c0) - c5_l0, 0.0)
+float c5_upWick0 = math.max(c5_h0 - math.max(c5_o0, c5_c0), 0.0)
+
+bool p5mEngulfL = c5_bull0 and c5_bear1 and c5_body0 > math.abs(c5_c1-c5_o1)*1.2 and c5_vRat0 >= 1.5 and (inBullOB or nearBullOB or eql)
+bool p5mEngulfS = c5_bear0 and c5_bull1 and c5_body0 > math.abs(c5_c1-c5_o1)*1.2 and c5_vRat0 >= 1.5 and (inBearOB or nearBearOB or eqh)
+bool p5mPinL    = c5_dnWick0 >= c5_body0 * 2.5 and c5_closePos0 >= 0.75 and c5_vRat0 >= 1.4 and (inBullOB or nearBullOB)
+bool p5mPinS    = c5_upWick0 >= c5_body0 * 2.5 and c5_closePos0 <= 0.25 and c5_vRat0 >= 1.4 and (inBearOB or nearBearOB)
+bool _5mPatL = p5mEngulfL or p5mPinL
+bool _5mPatS = p5mEngulfS or p5mPinS
+
+float instFlowScoreLong  = math.min((_zdFlipBull?30.0:0.0)+(_absorbNearSweepL?25.0:0.0)+(_iofiConfL?15.0:0.0)+(volVcoExpanding?5.0:0.0)+(_volExpL?15.0:0.0)+(_5mPatL?10.0:0.0), 100.0)
+float instFlowScoreShort = math.min((_zdFlipBear?30.0:0.0)+(_absorbNearSweepS?25.0:0.0)+(_iofiConfS?15.0:0.0)+(not volVcoExpanding and not volVcoCompress?5.0:0.0)+(_volExpS?15.0:0.0)+(_5mPatS?10.0:0.0), 100.0)
+bool instFlowGateLong  = instFlowScoreLong  >= _instMinAdapt
+bool instFlowGateShort = instFlowScoreShort >= _instMinAdapt
+
+
+// ════════════════════════════════════════════════════════════════════
+// RUN BARS TRACKER
+// ════════════════════════════════════════════════════════════════════
+var int   _runBars    = 0
+var int   _runDir     = 0
+var float _runVolPeak = 0.0
+if close > open
+    bool _dirFlip = _runDir != 1
+    _runDir     := 1
+    _runBars    := _dirFlip ? 1 : _runBars + 1
+    _runVolPeak := _dirFlip ? volume : math.max(_runVolPeak, volume)
+else if close < open
+    bool _dirFlip = _runDir != -1
+    _runDir     := -1
+    _runBars    := _dirFlip ? 1 : _runBars + 1
+    _runVolPeak := _dirFlip ? volume : math.max(_runVolPeak, volume)
+
+// ════════════════════════════════════════════════════════════════════
+// EXHAUSTION ENGINE
+// ════════════════════════════════════════════════════════════════════
+bool _e1Up = _runDir==1  and high>ta.highest(high[1],3) and volume>=volMA20*2.5 and bodyRatio<0.30 and upWickR>=0.45
+bool _e1Dn = _runDir==-1 and low<ta.lowest(low[1],3)   and volume>=volMA20*2.5 and bodyRatio<0.30 and dnWickR>=0.45
+float e1Score = (_e1Up or _e1Dn) ? 30.0 : 0.0
+
+float _e2RsiHiThres = math.max(math.min(68.0+normATR*3.0,76.0),62.0)
+float _e2RsiLoThres = math.max(math.min(32.0-normATR*3.0,38.0),24.0)
+float _rsi14e = ta.rsi(close, 14)   // ← ADD THIS LINE BACK
+bool  _e2Up = _runDir==1  and high>ta.highest(high,5)[1] and _rsi14e<ta.highest(_rsi14e,5)[1]*0.97 and _rsi14e>_e2RsiHiThres
+bool  _e2Dn = _runDir==-1 and low<ta.lowest(low,5)[1]   and _rsi14e>ta.lowest(_rsi14e,5)[1]*1.03  and _rsi14e<_e2RsiLoThres
+float e2Score = (_e2Up or _e2Dn) ? 25.0 : 0.0
+
+bool _e3Up = _runDir==1  and _runBars>=4 and zDelta<-0.2 and (zDelta[3]>0.4 or zDelta[4]>0.4)
+bool _e3Dn = _runDir==-1 and _runBars>=4 and zDelta>0.2  and (zDelta[3]<-0.4 or zDelta[4]<-0.4)
+float e3Score = (_e3Up or _e3Dn) ? 22.0 : 0.0
+
+bool _e4Up = _runDir==1  and _runBars>=5 and upWickR>=0.38 and upWickR[1]>=0.38 and upWickR[2]>=0.38
+bool _e4Dn = _runDir==-1 and _runBars>=5 and dnWickR>=0.38 and dnWickR[1]>=0.38 and dnWickR[2]>=0.38
+float e4Score = (_e4Up or _e4Dn) ? 15.0 : 0.0
+
+bool _rngShrink = (high-low)<(high[1]-low[1]) and (high[1]-low[1])<(high[2]-low[2]) and (high-low)<atr14*0.65
+bool _atKeyLvl  = nearPDH or nearPDL or nearPWH or nearPWL or nearPMH or nearPML or eqh or eql or inBullOB or inBearOB
+bool _e5Up = _runDir==1  and _rngShrink and _atKeyLvl
+bool _e5Dn = _runDir==-1 and _rngShrink and _atKeyLvl
+float e5Score = (_e5Up or _e5Dn) ? 8.0 : 0.0
+
+float exhaustScore = math.min(e1Score+e2Score+e3Score+e4Score+e5Score,100.0)
+bool  exhaustUp    = exhaustScore >= 30.0 and _runDir ==  1
+bool  exhaustDown  = exhaustScore >= 30.0 and _runDir == -1
+float exhaustBonusL = exhaustDown and exhaustScore>=50.0 ? math.min((exhaustScore-50.0)*0.44,22.0) : 0.0
+float exhaustBonusS = exhaustUp   and exhaustScore>=50.0 ? math.min((exhaustScore-50.0)*0.44,22.0) : 0.0
+bool  exhaustGateLong  = not (exhaustUp   and exhaustScore >= 55.0)
+bool  exhaustGateShort = not (exhaustDown and exhaustScore >= 55.0)
+string exhaustTag = exhaustUp ? "Exh Up " + str.tostring(math.round(exhaustScore)) : exhaustDown ? "Exh Dn " + str.tostring(math.round(exhaustScore)) : ""
+
+
+
+// ── SIGNAL 1: VOLATILITY SQUEEZE (78% accuracy) ──
+float _bbSMA = ta.sma(close, 20)
+float _bbStd = ta.stdev(close, 20)
+float bbU = _bbSMA + 2 * _bbStd
+float bbL = _bbSMA - 2 * _bbStd
+float bbW = (bbU - bbL) / _bbSMA * 100
+float bbwPct = ta.percentile_nearest_rank(bbW, 100, 20)
+bool sqActive = bbwPct <= 20
+var int sqBars = 0
+sqBars := sqActive ? sqBars + 1 : 0
+bool bm1 = sqActive and sqBars >= 5
+float exp1 = sqBars >= 15 ? atr14*3.0 : sqBars >= 10 ? atr14*2.5 : atr14*2.0
+
+// ── SIGNAL 2: VOLUME DIVERGENCE (73% accuracy) ──
+var int volDecline = 0
+volDecline := volume < volume[1] ? volDecline + 1 : 0
+// v14.8: use volMA20 (already declared) — removed duplicate ta.sma(volume,20)
+bool volVacuum = volDecline >= 3 and volume/volMA20 < 0.7
+float rangeNow = high - low
+float rangeMA = ta.sma(high-low, 5)
+bool rangeTight = rangeNow < rangeMA*0.6
+bool volDiv = volVacuum and rangeTight
+bool volReentry = volume > volMA20*1.5 and volVacuum[1]
+bool bm2 = volDiv or volReentry
+float exp2 = volReentry ? atr14*1.8 : atr14*1.5
+
+// ── SIGNAL 3: TIME OF DAY (68% accuracy) ──
+int hourNY = hour(time, "America/New_York")
+int minNY = minute(time)
+float hourMult = hourNY==9 and minNY>=30 ? 1.7 : hourNY>=10 and hourNY<=11 ? 1.4 : hourNY>=15 and minNY>=30 ? 1.5 : 1.0
+bool bm3 = hourMult >= 1.4
+float exp3 = atr14 * hourMult
+
+// ── SIGNAL 4: EXTREME ORDER FLOW (reuse existing Z-Delta) ──
+bool bm4 = math.abs(zDelta) >= 5.0 or absorpBull or absorpBear
+float exp4 = math.abs(zDelta) >= 5.0 ? atr14*2.0 : atr14*1.6
+
+// ── SIGNAL 5: STOP SWEEP (reuse existing hunt detection) ──
+bool bm5 = (inPostSweepWindowL or inPostSweepWindowS) and (_poolScoreHi or _poolScoreMax)
+float exp5 = _poolScoreMax ? atr14*2.5 : _poolScoreHi ? atr14*2.0 : atr14*1.6
+
+// ── SIGNAL 6: BREAK OF STRUCTURE (reuse existing BOS) ──
+bool bm6 = (bullBOS or bearBOS) and isHighVol
+float exp6 = atr14 * 1.5
+
+// ── COMPOSITE BIG MOVE SCORE (0-6) ──
+int bigMoveScore = (bm1?1:0) + (bm2?1:0) + (bm3?1:0) + (bm4?1:0) + (bm5?1:0) + (bm6?1:0)
+
+// ── EXPECTED MAGNITUDE ──
+float bigMoveMag = bm1 ? exp1 : bm2 ? exp2 : bm3 ? exp3 : bm4 ? exp4 : bm5 ? exp5 : bm6 ? exp6 : atr14
+if bigMoveScore >= 2
+    bigMoveMag := math.max(bigMoveMag, atr14 * 2.5)
+if bigMoveScore >= 3
+    bigMoveMag := math.max(bigMoveMag, atr14 * 3.0)
+if bigMoveScore >= 4
+    bigMoveMag := math.max(bigMoveMag, atr14 * 3.5)
+
+// ── CONVICTION % ──
+float bigMoveConv = bigMoveScore >= 4 ? 91.0 : bigMoveScore == 3 ? 85.0 : bigMoveScore == 2 ? 78.0 : bigMoveScore == 1 ? 68.0 : 50.0
+
+// ── ALERT THRESHOLD ──
+bool bigMoveAlert = bigMoveScore >= i_bmMinScore
+
+// ── DISPLAY TEXT ──
+string bmAlertText = bigMoveScore >= 4 ? "🔥 EXTREME MOVE" : bigMoveScore == 3 ? "🔥 BIG MOVE" : bigMoveScore == 2 ? "⚡ LARGE MOVE" : ""
+float _bmDisplay = syminfo.mintick <= 0.0001 ? bigMoveMag / syminfo.mintick : bigMoveMag
+string bmInfoText = bigMoveAlert ? str.tostring(math.round(_bmDisplay * 10) / 10, "#.#") + " pts  " + str.tostring(math.round(bigMoveConv)) + "%" : "─"
+string bmFactors = (bm1?"Squeeze ":"")+(bm2?"Vol ":"")+(bm3?"Time ":"")+(bm4?"Flow ":"")+(bm5?"Sweep ":"")+(bm6?"BOS ":"")
+
+// Trim trailing space
+if bmFactors != ""
+    bmFactors := str.replace(bmFactors, " ", "", str.length(bmFactors)-1)
+
+// ── COLORS ──
+color bmColor = bigMoveScore >= 4 ? color.new(#FF3B30, 0) :  // Red
+                     bigMoveScore == 3 ? color.new(#FF8C00, 0) :  // Orange
+                     bigMoveScore == 2 ? color.new(#FFD700, 0) :  // Gold
+                                         color.new(#888888, 0)    // Gray
+color _bgN = color.new(c_bg,0)
+color bmBG = bigMoveScore >= 4 ? color.new(#FF3B30, 75) :   // Ultra bright red
+             bigMoveScore == 3 ? color.new(#FF8C00, 85) :   // Bright orange
+             bigMoveScore == 2 ? color.new(#FFD700, 92) :   // Subtle gold
+             _bgN
+
+// ── VISUAL MARKERS ──
+bgcolor(bigMoveScore >= 3 ? color.new(#FF8C00,95) : bigMoveScore == 2 ? color.new(#FFD700,97) : na, title="Big Move Zone")
+
+if bigMoveScore >= 3 and bigMoveScore[1] < 3
+    label.new(bar_index, high, 
+              "🔥 "+str.tostring(bigMoveScore)+" SIGNALS\n"+str.tostring(math.round(_bmDisplay * 10) / 10, "#.#")+" pts expected",
+              style=label.style_label_down,
+              color=color.new(#FF8C00, 20),
+              textcolor=color.white,
+              size=size.small)
+
+
+// ════════════════════════════════════════════════════════════════════
+// ENHANCED EXHAUSTION DETECTION (v13.1)
+// Tracks rate of change and divergence for improved signal quality
+// ════════════════════════════════════════════════════════════════════
+// Rate of change tracking for exhaustion momentum
+float _exhRoc = exhaustScore - nz(exhaustScore[3], exhaustScore)
+float _exhRocNorm = math.max(math.min(_exhRoc / 20.0, 1.0), -1.0)
+bool _exhAccel = math.abs(_exhRoc) > 15.0  // Rapid exhaustion buildup
+
+// Divergence between exhaustion and price movement
+float _priceRoc = (close - close[5]) / math.max(atr14, syminfo.mintick)
+bool _exhDivBull = exhaustUp and _priceRoc < -0.5 and _exhRoc > 5.0    // Price falling but bulls exhausting
+bool _exhDivBear = exhaustDown and _priceRoc > 0.5 and _exhRoc > 5.0   // Price rising but bears exhausting
+
+// Enhanced exhaustion tag for HUD with divergence and acceleration info
+string _exhEnhTag = ""
+if exhaustScore > 30
+    _exhEnhTag := (exhaustUp ? "Up" : "Dn") + str.tostring(math.round(exhaustScore))
+    if _exhDivBull or _exhDivBear
+        _exhEnhTag := _exhEnhTag + " Div!"
+    else if _exhAccel
+        _exhEnhTag := _exhEnhTag + " ↑↑"
+    else if math.abs(_exhRoc) > 8.0
+        _exhEnhTag := _exhEnhTag + " ↑"
+
+
+// ── VWAP deviation (Feature A) ─────────────────────────────────────
+// Session VWAP is built-in via ta.vwap (anchors at session open).
+// Positive = price above fair value (extended), negative = below.
+float _sessVWAP  = ta.vwap
+float _vwapDevR  = (close - _sessVWAP) / math.max(atr14, syminfo.mintick)
+// z-scored separately in the _qfA line below.
+
+// ── Sweep wick tracker (Feature B) ─────────────────────────────────
+// Captures the normalised wick size at sweep candle.
+// Resets to 0 once the post-sweep window closes.
+var float _lastWickATR = 0.0
+if huntDangerBull
+    _lastWickATR := fullRange * dnWickR / math.max(atr14, syminfo.mintick)
+else if huntDangerBear
+    _lastWickATR := fullRange * upWickR / math.max(atr14, syminfo.mintick)
+else if not (inPostSweepWindowL or inPostSweepWindowS)
+    _lastWickATR := 0.0
+
+// ── EMA(20) tension (Feature D) ────────────────────────────────────
+// How stretched is price relative to its 20-bar mean?
+// +2.0 = 2 ATR above EMA = extended bullish, likely to revert.
+float _ema20    = f_hma(close, 20)
+float _emaTensR  = (close - _ema20) / math.max(atr14, syminfo.mintick)
+
+// ── 5m RSI(7) divergence (Feature E) ───────────────────────────────
+
+// Bull div: 1m price lower low but 5m RSI higher — momentum holding.
+// Bear div: 1m price higher high but 5m RSI lower — momentum fading.
+float _htf5_rsi7 = request.security(syminfo.tickerid, "5",
+                     ta.rsi(close, 7), lookahead=barmerge.lookahead_off)
+float _rsi7_3ago = nz(_htf5_rsi7[3], _htf5_rsi7)
+bool  _5mBullDiv = close < nz(close[3], close) and
+                   _htf5_rsi7 > _rsi7_3ago and _htf5_rsi7 < 55.0
+bool  _5mBearDiv = close > nz(close[3], close) and
+                   _htf5_rsi7 < _rsi7_3ago and _htf5_rsi7 > 45.0
+// Continuous encoding: divergence = ±0.8, RSI trend state = ±0–0.6
+float _rsi7Norm  = (_htf5_rsi7 - 50.0) / 50.0   // -1 to +1
+
+
+// ════════════════════════════════════════════════════════════════════
+// KNN ML ENGINE v10.1 — COMPLETE REPLACEMENT BLOCK
+// ─────────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════
+// SECTION 1 — 18-FEATURE VECTOR
+// ════════════════════════════════════════════════════════════════════
+// Feature  0 : Z-delta           (z-scored)        _qf0  → p2_f0
+// Feature  1 : VolVCO ROC        (z-scored)        _qf2  → p2_f2
+// Feature  2 : Hunt grade        (bounded 0-1)     _qf5  → p2_f5
+// Feature  3 : VolVCO norm       (z-scored)        _qf7  → p2_f7
+// Feature  4 : CMP norm          (z-scored)        _qf8  → p2_f8
+// Feature  5 : Z-ROC             (z-scored)        _qf9  → p2_f9
+// Feature  6 : HTF pool prox.    (bounded 0-1)     _qf13 → p2_f13  [v14.8: was session progress]
+// Feature  7 : Close pos z-score (z-scored)        _qf15 → p2_f15  [v14.8: was VSA integer]
+// Feature  8 : Hunt zone         (bounded 0-1)     _qfHz → p2_f24
+// Feature  9 : Session quality   (bounded 0-1)     _qf25 → p2_f25
+// Feature 10 : Post-sweep prog.  (bounded 0-1)     _qf27 → p2_f27
+// Feature 11 : InstFlow          (z-scored)        _qf28 → p2_f28
+// Feature 12 : AVWAP deviation   (z-scored)        _qfA  → p2_fA
+// Feature 13 : Sweep wick ATR    (bounded 0-1)     _qfB  → p2_fB
+// Feature 14 : Pool density      (bounded 0-1)     _qfC  → p2_fC
+// Feature 15 : EMA tension       (z-scored)        _qfD  → p2_fD
+// Feature 16 : 5m RSI divergence (±0.8 / ±0-0.6)  _qfE  → p2_fE
+// Feature 17 : Run-divergence Z  (z-scored)        _qfV  → p2_fV   [v14.8: was volume imbalance]
+// ────────────────────────────────────────────────────────────────────
+// Distance-scale constants — higher = more influence on KNN distance.
+// Calibrated to reflect each feature's predictive relevance for buy/sell.
+// v14.8: All _kS pre-scales set to 1.0 — Adam optimizer owns feature weighting fully
+float _kS0=1.0,_kS1=1.0,_kS2=1.0,_kS3=1.0,_kS4=1.0,_kS5=1.0
+float _kS6=1.0,_kS7=1.0,_kS8=1.0,_kS9=1.0,_kS10=1.0,_kS11=1.0
+float _kS12=1.0,_kS13=1.0,_kS14=1.0,_kS15=1.0,_kS16=1.0,_kS17=1.0
+
+// ── Feature values ──────────────────────────────────────────────────
+float _qf0  = f_zscore(zEff, 50)                                          // 0
+float _qf2  = f_zscore(volVcoRocN, 50)                                    // 1
+float _qf5  = (hg5Bull or hg5Bear ? 5.0 :                                 // 2
+               hg4Bull or hg4Bear ? 4.0 :
+               hg3Bull or hg3Bear ? 3.0 :
+               hg2Bull or hg2Bear ? 2.0 :
+               hg1Bull or hg1Bear ? 1.0 : 0.0) / 5.0
+float _qf7  = f_zscore(volVcoNorm, 50)                                    // 3
+float _qf8  = f_zscore(cmpNorm, 50)                                       // 4
+float _qf9  = f_zscore(zEff - nz(zEff[3], zEff), 50)                    // 5
+float _qf13 = math.min(_distToAllPools, 5.0) / 5.0                   // 6 HTF pool proximity (was: session progress)
+float _qf15 = f_zscore(_vsaClosePos, 50)                              // 7 Close position in range z-scored (was: VSA integer)
+float _qfHz = math.min(_nearestPool, 5.0) / 5.0                          // 8 Hunt zone
+float _vwapBandComp = ta.stdev(_vwapDevR, 10)
+float _qf25 = f_zscore(_vwapBandComp, 50)   // low = coiling, high = extended                                         // 9
+float _qf27 = inPostSweepWindowL ?                                        // 10
+              float(_postSweepBarsL) / float(i_postSweepBars) :
+              inPostSweepWindowS ?
+              float(_postSweepBarsS) / float(i_postSweepBars) : 1.0
+float _qf28 = f_zscore(                                                    // 11
+              math.max(instFlowScoreLong, instFlowScoreShort) / 100.0, 50)
+float _qfA  = f_zscore(_vwapDevR, 50)                                     // 12
+float _qfB  = math.max(math.min(_lastWickATR / 3.0, 1.0), 0.0)           // 13
+float _qfC  = math.min(_poolScore, 150.0) / 150.0                        // 14
+float _qfD  = f_zscore(_emaTensR, 50)                                    // 15
+float _qfE  = _5mBullDiv ? 0.8 : _5mBearDiv ? -0.8 :                    // 16
+              math.max(math.min(_rsi7Norm, 0.6), -0.6)
+// v14.8 Feature 17: Run-divergence Z — price running N bars but zDelta opposing
+// Positive = bars running up with bearish delta (exhaustion), Negative = inverse
+float _runDivRaw = float(_runBars) * (zEff < 0.0 and _runDir == 1 ? -1.0 : zEff > 0.0 and _runDir == -1 ? 1.0 : 0.0)
+float _qfV    = f_zscore(_runDivRaw, 30)                              // 17 Run-divergence (was: volume imbalance)
+
+// ════════════════════════════════════════════════════════════════════
+// SECTION 2 — REGIME BUCKETING (36 regimes)
+// 6 session slots × 3 trend dirs × 3 vol/hurst combos = 36
+// ════════════════════════════════════════════════════════════════════
+int _p2SessBucket  = _svSlot >= 0 ? _svSlot : 0            // 0-5
+int _p2TdirBucket  = tDir == 1 ? 2 : tDir == -1 ? 0 : 1   // 0-2
+int _p2VolBucket   = atrRatio >= 1.3 ? 2 : atrRatio <= 0.8 ? 0 : 1   // 0-2
+int _p2HurstBucket = hurstVal > 0.60 ? 2 : hurstVal < 0.45 ? 0 : 1   // 0-1
+//int _p2Regime      = _p2SessBucket * 18 + _p2TdirBucket * 6 +
+//                     _p2VolBucket * 2  + _p2HurstBucket   // range 0-35
+                     // Fix — correct multipliers for 6×3×3×3 = 162 unique regimes
+int _p2Regime = _p2SessBucket * 27 + _p2TdirBucket * 9 + _p2VolBucket * 3 + _p2HurstBucket
+
+// ════════════════════════════════════════════════════════════════════
+// SECTION 3 — STORAGE ARRAYS (18 features + metadata)
+// Global ceiling = 36 regimes × 50 bars/regime = 1800 samples
+// ════════════════════════════════════════════════════════════════════
+var float[] p2_f0  = array.new_float()   //  0 Z-delta
+var float[] p2_f2  = array.new_float()   //  1 VolVCO ROC
+var float[] p2_f5  = array.new_float()   //  2 Hunt grade
+var float[] p2_f7  = array.new_float()   //  3 VolVCO norm
+var float[] p2_f8  = array.new_float()   //  4 CMP norm
+var float[] p2_f9  = array.new_float()   //  5 Z-ROC
+var float[] p2_f13 = array.new_float()   //  6 HTF pool proximity
+var float[] p2_f15 = array.new_float()   //  7 Close position z-scored
+var float[] p2_f24 = array.new_float()   //  8 Hunt zone
+var float[] p2_f25 = array.new_float()   //  9 Session quality
+var float[] p2_f27 = array.new_float()   // 10 Post-sweep progress
+var float[] p2_f28 = array.new_float()   // 11 InstFlow
+var float[] p2_fA  = array.new_float()   // 12 AVWAP deviation
+var float[] p2_fB  = array.new_float()   // 13 Sweep wick
+var float[] p2_fC  = array.new_float()   // 14 Pool density
+var float[] p2_fD  = array.new_float()   // 15 EMA tension
+var float[] p2_fE  = array.new_float()   // 16 5m RSI divergence
+var float[] p2_fV  = array.new_float()   // 17 Run-divergence Z
+
+// ── Metadata ────────────────────────────────────────────────────────
+var float[] p2_lbl = array.new_float()   // OFRL label (0.5=pending)
+var int[]   p2_rgm = array.new_int()     // regime bucket
+var float[] p2_sig = array.new_float()   // signal probability snapshot
+var bool[]  p2_dir = array.new_bool()    // true=bull outcome (set by OFRL)
+
+// ── Adaptive feature weights — 18 elements, init 1.0 ────────────────
+// Updated each resolved bar via online gradient descent (cross-entropy).
+//var float[] featWeights = array.new_float(18, 1.0)
+var float[] featWeights_trend = array.new_float(18, 1.0)  // trending
+var float[] featWeights_range = array.new_float(18, 1.0)  // ranging
+var float[] featWeights_hvol  = array.new_float(18, 1.0)  // high-vol spike
+// ── Per-regime adaptive sigma — updated each time OFRL resolves ──────
+var float[] sigmaPerRegime = array.new_float(162, 0.5)
+// ── Platt Scaling calibration parameters ────────────────────────────
+// v14.8: Platt arrays expanded to 6 (3 regimes × 2 directions: even=bull, odd=bear)
+// Index = _rfMacro * 2 + (bull ? 0 : 1)
+var float[] _plattA = array.new_float(6, 1.0)   // [0]=trend-bull [1]=trend-bear [2]=range-bull [3]=range-bear [4]=hvol-bull [5]=hvol-bear
+var float[] _plattB = array.new_float(6, 0.0)
+var int[]   _plattN = array.new_int(6, 0)
+float _plattLR = 0.005
+// Adaptive learning rate based on Hurst exponent (v13.1)
+// Trending (Hurst > 0.60): slower learning (0.005) for stability
+// Ranging (Hurst < 0.45): faster learning (0.020) for quick adaptation
+// Neutral: moderate learning (0.010)
+float _knnLR = hurstVal > 0.60 ? 0.005 : hurstVal < 0.45 ? 0.020 : 0.010
+
+// ── OFRL pending queues (forward-scan outcome resolution) ────────────
+var int[]   _p2OfrlIdxQ  = array.new_int()
+var float[] _p2OfrlEntQ  = array.new_float()
+var float[] _p2OfrlRQ    = array.new_float()
+var bool[]  _p2OfrlLongQ = array.new_bool()
+var int[]   _p2OfrlBarsQ = array.new_int()
+var float[] _p2OfrlMFEQ  = array.new_float()   // max favourable excursion
+var float[] _p2OfrlMAEQ  = array.new_float()   // max adverse excursion
+
+// ── Pending label queue (used by gate-stack downstream) ─────────────
+var int[]   _pendIdxQ  = array.new_int()
+var float[] _pendTPQ   = array.new_float()
+var float[] _pendSLQ   = array.new_float()
+var bool[]  _pendLongQ = array.new_bool()
+var float[] featVelocity_trend = array.new_float(18, 0.0)
+var float[] featVelocity_range = array.new_float(18, 0.0)
+var float[] featVelocity_hvol  = array.new_float(18, 0.0)
+// Add at line ~1039, alongside the velocity declarations:
+var float[] featSq_trend = array.new_float(18, 0.0)
+var float[] featSq_range = array.new_float(18, 0.0)
+var float[] featSq_hvol  = array.new_float(18, 0.0)
+// ════════════════════════════════════════════════════════════════════
+// SECTION 4 — HELPER: f_p2_remove(_ei)
+// Atomically removes sample at index _ei from all 18 feature arrays
+// and all metadata arrays, then adjusts OFRL queue pointers.
+// ════════════════════════════════════════════════════════════════════
+f_p2_remove(_ei) =>
+    array.remove(p2_f0,  _ei), array.remove(p2_f2,  _ei)
+    array.remove(p2_f5,  _ei), array.remove(p2_f7,  _ei)
+    array.remove(p2_f8,  _ei), array.remove(p2_f9,  _ei)
+    array.remove(p2_f13, _ei), array.remove(p2_f15, _ei)
+    array.remove(p2_f24, _ei), array.remove(p2_f25, _ei)
+    array.remove(p2_f27, _ei), array.remove(p2_f28, _ei)
+    array.remove(p2_fA,  _ei), array.remove(p2_fB,  _ei)
+    array.remove(p2_fC,  _ei), array.remove(p2_fD,  _ei)
+    array.remove(p2_fE,  _ei), array.remove(p2_fV,  _ei)
+    array.remove(p2_rgm, _ei), array.remove(p2_lbl, _ei)
+    array.remove(p2_sig, _ei), array.remove(p2_dir, _ei)
+    // Adjust OFRL queue pointers so stored indices remain valid
+    if array.size(_p2OfrlIdxQ) > 0
+        for _qi = 0 to array.size(_p2OfrlIdxQ) - 1
+            int _oi = array.get(_p2OfrlIdxQ, _qi)
+            if _oi > _ei
+                array.set(_p2OfrlIdxQ, _qi, _oi - 1)
+            else if _oi == _ei
+                array.set(_p2OfrlIdxQ, _qi, -1)   // mark invalidated
+
+
+// ════════════════════════════════════════════════════════════════════
+// SECTION 5 — f_p2_push(_isLong)
+// Appends current bar's 18-feature vector, then applies:
+//   (a) per-regime FIFO eviction  — keep ≤ i_p2BktMax per regime
+//   (b) global hard-ceiling once  — keep ≤ 36 × i_p2BktMax = 1800
+// The lowest-quality non-protected sample is evicted first.
+// ════════════════════════════════════════════════════════════════════
+f_p2_push(_isLong) =>
+    // ── Append all 18 features in index order ───────────────────────
+    array.push(p2_f0,  _qf0 )
+    array.push(p2_f2,  _qf2 )
+    array.push(p2_f5,  _qf5 )
+    array.push(p2_f7,  _qf7 )
+    array.push(p2_f8,  _qf8 )
+    array.push(p2_f9,  _qf9 )
+    array.push(p2_f13, _qf13)
+    array.push(p2_f15, _qf15)
+    array.push(p2_f24, _qfHz)   // Hunt zone stored in p2_f24 slot
+    array.push(p2_f25, _qf25)
+    array.push(p2_f27, _qf27)
+    array.push(p2_f28, _qf28)
+    array.push(p2_fA,  _qfA )
+    array.push(p2_fB,  _qfB )
+    array.push(p2_fC,  _qfC )
+    array.push(p2_fD,  _qfD )
+    array.push(p2_fE,  _qfE )
+    array.push(p2_fV,  _qfV )
+    // ── Metadata ────────────────────────────────────────────────────
+    array.push(p2_rgm, _p2Regime)
+    array.push(p2_lbl, 0.5)        // pending label — OFRL overwrites
+    array.push(p2_sig, 0.0)
+    array.push(p2_dir, _isLong)    // direction placeholder — OFRL overwrites
+
+    // ── (a) Per-regime eviction ──────────────────────────────────────
+    int _bktCount = 0
+    int _p2Sz     = array.size(p2_lbl)
+    for _bi = 0 to _p2Sz - 1
+        if array.get(p2_rgm, _bi) == _p2Regime
+            _bktCount += 1
+    if _bktCount > i_p2BktMax
+        int   _evictIdx   = -1
+        float _evictScore = 2.0
+        for _bi2 = 0 to array.size(p2_lbl) - 1
+            if array.get(p2_rgm, _bi2) == _p2Regime
+                float _bl   = array.get(p2_lbl,  _bi2)
+                float _evSc = _bl == 0.5 ? 0.51 : _bl
+                bool  _prot = _bl >= 1.0 and array.get(p2_sig, _bi2) >= 80.0
+                if not _prot and (_evictIdx == -1 or _evSc < _evictScore)
+                    _evictIdx   := _bi2
+                    _evictScore := _evSc
+        if _evictIdx >= 0
+            f_p2_remove(_evictIdx)
+
+    // ── (b) Global hard-ceiling (36 × i_p2BktMax = max 1800) ────────
+    // [FIX 2]: Only ONE while-loop — the duplicate from v10.0 is removed.
+    while array.size(p2_lbl) > 162 * i_p2BktMax
+        int   _gIdx   = -1
+        float _gScore = 2.0
+        int _dynKGD = hurstVal > 0.60 ? 10 : hurstVal < 0.45 ? 3 : i_knnK
+        int   _kGD  = _dynKGD
+        int[]   _gdIdx  = array.new_int(_kGD,  -1)
+        float _gdCachedMaxD = 1e9   // cached heap maximum distance
+        int   _gdCachedMaxI = 0     // cached heap maximum index
+        // ── Cached heap-max for O(1) insertion check ─────────
+        //float _gdCachedMaxD = 1e9
+        //int   _gdCachedMaxI = 0
+        for _gi = 0 to array.size(p2_lbl) - 1
+            float _gl    = array.get(p2_lbl,  _gi)
+            float _gEvSc = _gl == 0.5 ? 0.51 : _gl
+            bool  _gProt = _gl >= 1.0 and array.get(p2_sig, _gi) >= 80.0
+            if not _gProt and (_gIdx == -1 or _gEvSc < _gScore)
+                _gIdx   := _gi
+                _gScore := _gEvSc
+        if _gIdx < 0
+            _gIdx := 0
+        f_p2_remove(_gIdx)
+
+// ════════════════════════════════════════════════════════════════════
+// SECTION 6 — KNN PUSH GATE
+// Push every strided in-session bar; direction unknown at push time
+// (OFRL discovers and sets direction 30 bars later).
+// ════════════════════════════════════════════════════════════════════
+bool _knnPushGate  = i_knnOn and inAnySess and not sessBlocked
+var int _strideCounter = 0
+_strideCounter := _knnPushGate ? _strideCounter + 1 : 0
+bool _strideAllow  = _knnPushGate and (_strideCounter % i_knnStride == 0)
+int _macroRgm = atrRatio > 1.5 ? 2 : hurstVal > 0.60 ? 0 : hurstVal < 0.45 ? 1 : 0
+float[] _activeWeights = _macroRgm == 2 ? featWeights_hvol :
+                         _macroRgm == 1 ? featWeights_range : featWeights_trend
+if _strideAllow
+    f_p2_push(true)   // direction=true is a placeholder; OFRL overwrites
+
+// ════════════════════════════════════════════════════════════════════
+// SECTION 7 — OFRL: OUTCOME FORWARD RESOLUTION (30 bars lookahead)
+// Registers each pushed bar for bidirectional forward scanning.
+// After i_ofrlLookFwd bars (default 30), the dominant price movement
+// determines the label and direction.  Labels feed the KNN buffer.
+// After labelling each resolved bar, online gradient descent updates
+// the 18 feature weights via cross-entropy loss.
+
+int _adaptLookFwd = atrRatio > 1.5 ? math.max(8, int(i_ofrlLookFwd * 0.5)) :
+                         atrRatio < 0.7 ? int(i_ofrlLookFwd * 1.3) :
+                         i_ofrlLookFwd
+// ════════════════════════════════════════════════════════════════════
+if _strideAllow and array.size(_p2OfrlIdxQ) < 100
+    float _p2R = math.max(atr14 * i_slAtr, atr14 * 0.3)
+    array.push(_p2OfrlIdxQ,  array.size(p2_lbl) - 1)
+    array.push(_p2OfrlEntQ,  close)
+    array.push(_p2OfrlRQ,    _p2R)
+    array.push(_p2OfrlLongQ, true)      // placeholder — overwritten
+    array.push(_p2OfrlBarsQ, _adaptLookFwd)
+    array.push(_p2OfrlMFEQ,  0.0)
+    array.push(_p2OfrlMAEQ,  0.0)
+
+if array.size(_p2OfrlIdxQ) > 0
+    int _p2oi = 0
+    while _p2oi < array.size(_p2OfrlIdxQ)
+        int   _p2Idx  = array.get(_p2OfrlIdxQ,  _p2oi)
+        float _p2Ent  = array.get(_p2OfrlEntQ,  _p2oi)
+        float _p2R2   = array.get(_p2OfrlRQ,    _p2oi)
+        int   _p2Bars = array.get(_p2OfrlBarsQ, _p2oi)
+
+        // Track bidirectional excursion symmetrically
+        float _p2MFE = math.max(array.get(_p2OfrlMFEQ, _p2oi), high - _p2Ent)
+        float _p2MAE = math.max(array.get(_p2OfrlMAEQ, _p2oi), _p2Ent - low)
+        array.set(_p2OfrlMFEQ, _p2oi, _p2MFE)
+        array.set(_p2OfrlMAEQ, _p2oi, _p2MAE)
+
+        bool _p2Expd  = _p2Bars <= 0
+        bool _p2SlHit = _p2MAE >= _p2R2   // price fell 1R from entry
+
+        if _p2Idx < 0
+            // Invalidated pointer — clean up
+            array.remove(_p2OfrlIdxQ, _p2oi), array.remove(_p2OfrlEntQ, _p2oi)
+            array.remove(_p2OfrlRQ,   _p2oi), array.remove(_p2OfrlLongQ,_p2oi)
+            array.remove(_p2OfrlBarsQ,_p2oi), array.remove(_p2OfrlMFEQ, _p2oi)
+            array.remove(_p2OfrlMAEQ, _p2oi)
+
+        else if (_p2SlHit or _p2Expd) and _p2Idx < array.size(p2_lbl)
+            // ── Determine actual outcome ────────────────────────────
+            float _upR = _p2R2 > 0 ? _p2MFE / _p2R2 : 0.0
+            float _dnR = _p2R2 > 0 ? _p2MAE / _p2R2 : 0.0
+            bool  _actualBull = _p2MFE > _p2MAE * 1.5 and _p2MAE < _p2R2
+            bool  _actualBear = _p2MAE > _p2MFE * 1.5 and _p2MFE < _p2R2
+            float _strongerR  = math.max(_upR, _dnR)
+
+            // Quality label — reflects magnitude of directional move
+            float _p2Lbl = 0.5   // default: mixed/unclear, skip in KNN
+            if _actualBull or _actualBear
+                _p2Lbl := _strongerR >= 2.0 ? 1.00 :   // 3R+ clean move
+                          _strongerR >= 1.5 ? 0.85 :   // 2R+ good move
+                          _strongerR >= 1.0 ? 0.70 :   // 1R+ decent move
+                          _strongerR >= 0.5 ? 0.40 :   // sub-1R weak
+                                              0.30      // micro-directional
+
+            // [FIX — direction-aware]: store actual direction from OFRL
+            if _p2Idx >= 0 and _p2Idx < array.size(p2_dir)
+                array.set(p2_dir, _p2Idx, _actualBull)
+
+            // [FIX 3 from v7.7]: unresolved bars (0.5) after 30-bar
+            // expiry are set to 0.5 and excluded from KNN voting.
+            if _p2Lbl != 0.5
+                array.set(p2_lbl, _p2Idx, _p2Lbl)
+            else
+                array.set(p2_lbl, _p2Idx, 0.5)
+
+
+            // ═══════════════════════════════════════════════════════
+            // ONLINE GRADIENT DESCENT — Gaussian kernel with adaptive σ
+            if _p2Lbl != 0.5 and _p2Idx >= 0
+                // Resolved bar feature vector
+                float rf0  = array.get(p2_f0,  _p2Idx)
+                float rf1  = array.get(p2_f2,  _p2Idx)
+                float rf2  = array.get(p2_f5,  _p2Idx)
+                float rf3  = array.get(p2_f7,  _p2Idx)
+                float rf4  = array.get(p2_f8,  _p2Idx)
+                float rf5  = array.get(p2_f9,  _p2Idx)
+                float rf6  = array.get(p2_f13, _p2Idx)
+                float rf7  = array.get(p2_f15, _p2Idx)
+                float rf8  = array.get(p2_f24, _p2Idx)
+                float rf9  = array.get(p2_f25, _p2Idx)
+                float rf10 = array.get(p2_f27, _p2Idx)
+                float rf11 = array.get(p2_f28, _p2Idx)
+                float rf12 = array.get(p2_fA,  _p2Idx)
+                float rf13 = array.get(p2_fB,  _p2Idx)
+                float rf14 = array.get(p2_fC,  _p2Idx)
+                float rf15 = array.get(p2_fD,  _p2Idx)
+                float rf16 = array.get(p2_fE,  _p2Idx)
+                float rf17 = array.get(p2_fV,  _p2Idx)
+
+                int _rfRgm = array.get(p2_rgm, _p2Idx)   // regime of this resolved bar
+                int _rfTdir  = (_rfRgm / 9)  % 3
+                int _rfVol   = (_rfRgm / 3)  % 3
+                int _rfMacro = _rfVol == 2 ? 2 : _rfTdir == 2 ? 0 : _rfTdir == 0 ? 1 : 0
+                float[] _rfActiveW = _rfMacro == 2 ? featWeights_hvol :
+                     _rfMacro == 1 ? featWeights_range : featWeights_trend
+              //  // Adaptive K for gradient descent
+                int _dynKGD = hurstVal > 0.60 ? 10 : hurstVal < 0.45 ? 3 : i_knnK
+                int _kGD  = _dynKGD
+                float[] _gdDist = array.new_float(_kGD, 1e9)
+                float[] _gdLbl  = array.new_float(_kGD, 0.5)
+                bool[]  _gdDir  = array.new_bool (_kGD, false)
+                int[]   _gdIdx  = array.new_int  (_kGD, -1)
+                float _gdCachedMaxD = 1e9
+                int   _gdCachedMaxI = 0
+
+                // 1. Find K nearest labelled neighbours in same regime
+                for _gi = 0 to array.size(p2_lbl) - 1
+                    if _gi == _p2Idx
+                        continue
+                    if array.get(p2_lbl, _gi) == 0.5
+                        continue
+                    if array.get(p2_rgm, _gi) != _rfRgm
+                        continue
+
+                    // Compute per‑feature contributions (fdiff) for this neighbour
+                    float _fdiff0  = math.log(1.0+math.abs(rf0  - array.get(p2_f0,  _gi))) * _kS0
+                    float _fdiff1  = math.log(1.0+math.abs(rf1  - array.get(p2_f2,  _gi))) * _kS1
+                    float _fdiff2  = math.log(1.0+math.abs(rf2  - array.get(p2_f5,  _gi))) * _kS2
+                    float _fdiff3  = math.log(1.0+math.abs(rf3  - array.get(p2_f7,  _gi))) * _kS3
+                    float _fdiff4  = math.log(1.0+math.abs(rf4  - array.get(p2_f8,  _gi))) * _kS4
+                    float _fdiff5  = math.log(1.0+math.abs(rf5  - array.get(p2_f9,  _gi))) * _kS5
+                    float _fdiff6  = math.log(1.0+math.abs(rf6  - array.get(p2_f13, _gi))) * _kS6
+                    float _fdiff7  = math.log(1.0+math.abs(rf7  - array.get(p2_f15, _gi))) * _kS7
+                    float _fdiff8  = math.log(1.0+math.abs(rf8  - array.get(p2_f24, _gi))) * _kS8
+                    float _fdiff9  = math.log(1.0+math.abs(rf9  - array.get(p2_f25, _gi))) * _kS9
+                    float _fdiff10 = math.log(1.0+math.abs(rf10 - array.get(p2_f27, _gi))) * _kS10
+                    float _fdiff11 = math.log(1.0+math.abs(rf11 - array.get(p2_f28, _gi))) * _kS11
+                    float _fdiff12 = math.log(1.0+math.abs(rf12 - array.get(p2_fA,  _gi))) * _kS12
+                    float _fdiff13 = math.log(1.0+math.abs(rf13 - array.get(p2_fB,  _gi))) * _kS13
+                    float _fdiff14 = math.log(1.0+math.abs(rf14 - array.get(p2_fC,  _gi))) * _kS14
+                    float _fdiff15 = math.log(1.0+math.abs(rf15 - array.get(p2_fD,  _gi))) * _kS15
+                    float _fdiff16 = math.log(1.0+math.abs(rf16 - array.get(p2_fE,  _gi))) * _kS16
+                    float _fdiff17 = math.log(1.0+math.abs(rf17 - array.get(p2_fV,  _gi))) * _kS17
+
+                    //// Weighted distance
+                    float w0=array.get(_rfActiveW,0),w1=array.get(_rfActiveW,1),w2=array.get(_rfActiveW,2),w3=array.get(_rfActiveW,3),w4=array.get(_rfActiveW,4),w5=array.get(_rfActiveW,5)
+                    float w6=array.get(_rfActiveW,6),w7=array.get(_rfActiveW,7),w8=array.get(_rfActiveW,8),w9=array.get(_rfActiveW,9),w10=array.get(_rfActiveW,10),w11=array.get(_rfActiveW,11)
+                    float w12=array.get(_rfActiveW,12),w13=array.get(_rfActiveW,13),w14=array.get(_rfActiveW,14),w15=array.get(_rfActiveW,15),w16=array.get(_rfActiveW,16),w17=array.get(_rfActiveW,17)
+                    float _dGD =
+                             w0  * _fdiff0  +
+                             w1  * _fdiff1  +
+                             w2  * _fdiff2  +
+                             w3  * _fdiff3  +
+                             w4  * _fdiff4  +
+                             w5  * _fdiff5  +
+                             w6  * _fdiff6  +
+                             w7  * _fdiff7  +
+                             w8  * _fdiff8  +
+                             w9  * _fdiff9  +
+                             w10 * _fdiff10 +
+                             w11 * _fdiff11 +
+                             w12 * _fdiff12 +
+                             w13 * _fdiff13 +
+                             w14 * _fdiff14 +
+                             w15 * _fdiff15 +
+                             w16 * _fdiff16 +
+                             w17 * _fdiff17
+
+                    // Insert into top‑K heap (keep the smallest distances)
+                    if _dGD < _gdCachedMaxD
+                        array.set(_gdDist, _gdCachedMaxI, _dGD)
+                        array.set(_gdLbl,  _gdCachedMaxI, array.get(p2_lbl, _gi))
+                        array.set(_gdDir,  _gdCachedMaxI, array.get(p2_dir, _gi))
+                        array.set(_gdIdx,  _gdCachedMaxI, _gi)   // store neighbour index for later
+                        // Update cached max
+                        _gdCachedMaxD := array.get(_gdDist, 0)
+                        _gdCachedMaxI := 0
+                        for _jj = 1 to _kGD - 1
+                            if array.get(_gdDist, _jj) > _gdCachedMaxD
+                                _gdCachedMaxD := array.get(_gdDist, _jj)
+                                _gdCachedMaxI := _jj
+
+                // 2. After the neighbour scan, compute mean distance for this regime (sigma update)
+                float _meanDist = 0.0
+                int _nValid = 0
+                for _si = 0 to _kGD - 1
+                    if array.get(_gdDist, _si) < 1e8
+                        _meanDist += array.get(_gdDist, _si)
+                        _nValid   += 1
+                if _nValid > 0
+                    _meanDist := _meanDist / float(_nValid)
+                    float _sigmaNew = math.max(_meanDist / math.sqrt(2.0), 0.1)
+                    float _sigmaOld = array.get(sigmaPerRegime, _rfRgm)
+                    array.set(sigmaPerRegime, _rfRgm, _sigmaOld * 0.9 + _sigmaNew * 0.1)
+
+                // 3. Gaussian-weighted prediction and gradient descent
+                float _sigmaGD = math.max(array.get(sigmaPerRegime, _rfRgm), 0.1)   // current sigma for this regime
+                float _pPred = 0.5
+                float _S = 0.0
+                float _T = 0.0
+                // First compute the Gaussian weights and predicted probability
+                for _ni = 0 to _kGD - 1
+                    float _d = array.get(_gdDist, _ni)
+                    if _d >= 1e8
+                        continue
+                    float _g = math.exp(-_d * _d / (2.0 * _sigmaGD * _sigmaGD))
+                    float _lbl = array.get(_gdLbl, _ni)
+                    bool  _isBull = array.get(_gdDir, _ni)
+                    _S += _g
+                    _T += _g * _lbl * (_isBull ? 1.0 : 0.0)   // outcome quality (1 if bull)
+                if _S > 0
+                    _pPred := _T / _S
+                else
+                    _pPred := 0.5
+
+                // 4. Cross‑entropy gradient with respect to each feature weight
+                float _actual = _actualBull ? 1.0 : 0.0
+                float _eps = 1e-6
+                if _S > 0 and _pPred > _eps and _pPred < 1.0 - _eps
+                    for _fi = 0 to 17
+                        float _gradSum = 0.0
+                        for _ni = 0 to _kGD - 1
+                            int _neiIdx = array.get(_gdIdx, _ni)
+                            if _neiIdx < 0
+                                continue
+                            float _d = array.get(_gdDist, _ni)
+                            if _d >= 1e8
+                                continue
+                            // Recompute per‑feature difference for this neighbour
+                            //float _fdiff = 0.0
+                            float _fdiff =
+                                     _fi==0 ?math.log(1.0+math.abs(rf0 -array.get(p2_f0, _neiIdx)))*_kS0:
+                                     _fi==1 ?math.log(1.0+math.abs(rf1 -array.get(p2_f2, _neiIdx)))*_kS1:
+                                     _fi==2 ?math.log(1.0+math.abs(rf2 -array.get(p2_f5, _neiIdx)))*_kS2:
+                                     _fi==3 ?math.log(1.0+math.abs(rf3 -array.get(p2_f7, _neiIdx)))*_kS3:
+                                     _fi==4 ?math.log(1.0+math.abs(rf4 -array.get(p2_f8, _neiIdx)))*_kS4:
+                                     _fi==5 ?math.log(1.0+math.abs(rf5 -array.get(p2_f9, _neiIdx)))*_kS5:
+                                     _fi==6 ?math.log(1.0+math.abs(rf6 -array.get(p2_f13,_neiIdx)))*_kS6:
+                                     _fi==7 ?math.log(1.0+math.abs(rf7 -array.get(p2_f15,_neiIdx)))*_kS7:
+                                     _fi==8 ?math.log(1.0+math.abs(rf8 -array.get(p2_f24,_neiIdx)))*_kS8:
+                                     _fi==9 ?math.log(1.0+math.abs(rf9 -array.get(p2_f25,_neiIdx)))*_kS9:
+                                     _fi==10?math.log(1.0+math.abs(rf10-array.get(p2_f27,_neiIdx)))*_kS10:
+                                     _fi==11?math.log(1.0+math.abs(rf11-array.get(p2_f28,_neiIdx)))*_kS11:
+                                     _fi==12?math.log(1.0+math.abs(rf12-array.get(p2_fA, _neiIdx)))*_kS12:
+                                     _fi==13?math.log(1.0+math.abs(rf13-array.get(p2_fB, _neiIdx)))*_kS13:
+                                     _fi==14?math.log(1.0+math.abs(rf14-array.get(p2_fC, _neiIdx)))*_kS14:
+                                     _fi==15?math.log(1.0+math.abs(rf15-array.get(p2_fD, _neiIdx)))*_kS15:
+                                     _fi==16?math.log(1.0+math.abs(rf16-array.get(p2_fE, _neiIdx)))*_kS16:
+                                             math.log(1.0+math.abs(rf17-array.get(p2_fV, _neiIdx)))*_kS17
+
+                            float _g = math.exp(-_d * _d / (2.0 * _sigmaGD * _sigmaGD))
+                            float _lbl = array.get(_gdLbl, _ni)
+                            bool  _isBull = array.get(_gdDir, _ni)
+                            float _Li = _lbl * (_isBull ? 1.0 : 0.0)
+                            _gradSum += _g * _d * _fdiff * (_Li - _pPred)
+                        // Platt scaling update — per macro-regime × direction (6-way, v14.8)
+                        int   _plattIdx = _rfMacro * 2 + (_actualBull ? 0 : 1)
+                        float _pA = array.get(_plattA, _plattIdx)
+                        float _pB = array.get(_plattB, _plattIdx)
+                        int   _pN = array.get(_plattN, _plattIdx)
+                        array.set(_plattN, _plattIdx, _pN + 1)
+                        if _pN >= 20
+                            float _plattLogit = _pA * _pPred + _pB
+                            float _plattSig   = 1.0 / (1.0 + math.exp(-_plattLogit))
+                            float _plattErr   = _plattSig - _actual
+                            _pA -= _plattLR * _plattErr * _pPred * _plattSig * (1.0 - _plattSig)
+                            _pB -= _plattLR * _plattErr           * _plattSig * (1.0 - _plattSig)
+                            _pA  := math.max(math.min(_pA,  5.0), -5.0)
+                            _pB  := math.max(math.min(_pB,  3.0), -3.0)
+                            array.set(_plattA, _plattIdx, _pA)
+                            array.set(_plattB, _plattIdx, _pB)
+
+                        // Gradient of loss w.r.t weight
+                     //   var float[] featVelocity = array.new_float(20, 0.0)  // expand to 20 for new features
+                     //   var float[] featSq       = array.new_float(20, 0.0)   // second moment (v) – add this
+                        float _beta1 = 0.9
+                        float _beta2 = 0.999    // new – for second moment
+                        float _eps   = 1e-8     // to avoid division by zero
+
+                        //float _vel = _beta1 * array.get(featVelocity, _fi) + (1 - _beta1) * _gradSum
+                        //    array.set(featVelocity, _fi, _vel)
+                        //float _newW = array.get(_activeWeights, _fi) - _knnLR * _vel
+                        float[] _activeVel = _rfMacro == 2 ? featVelocity_hvol : _rfMacro == 1 ? featVelocity_range : featVelocity_trend
+                        float _old_m = array.get(_activeVel, _fi)
+                        float[] _activeSq  = _rfMacro == 2 ? featSq_hvol       : _rfMacro == 1 ? featSq_range       : featSq_trend
+                        float _old_v = array.get(_activeSq, _fi)
+                        float _new_m = _beta1 * _old_m + (1 - _beta1) * _gradSum
+                        float _new_v = _beta2 * _old_v + (1 - _beta2) * _gradSum * _gradSum
+                        array.set(_activeVel, _fi, _new_m)
+                        array.set(_activeSq, _fi, _new_v)
+                        // Bias correction (use _plattN, the number of resolved samples so far)
+                        float _pNsafe = math.max(float(_pN), 1.0)
+                        float _m_hat = _new_m / (1 - math.pow(_beta1, _pNsafe))
+                        float _v_hat = _new_v / (1 - math.pow(_beta2, _pNsafe))
+
+                        // Update weight
+                        float _newW = array.get(_rfActiveW, _fi) - _knnLR * _m_hat / (math.sqrt(math.max(_v_hat, 0.0)) + _eps)
+                        array.set(_rfActiveW, _fi, math.min(math.max(_newW, 0.05), 10.0))
+
+
+
+            //// ── Clean up resolved OFRL entry ────────────────────────────────
+            array.remove(_p2OfrlIdxQ, _p2oi), array.remove(_p2OfrlEntQ, _p2oi)
+            array.remove(_p2OfrlRQ,   _p2oi), array.remove(_p2OfrlLongQ,_p2oi)
+            array.remove(_p2OfrlBarsQ,_p2oi), array.remove(_p2OfrlMFEQ, _p2oi)
+            array.remove(_p2OfrlMAEQ, _p2oi)
+
+        else
+            // Not yet resolved — decrement lookahead counter
+            array.set(_p2OfrlBarsQ, _p2oi, _p2Bars - 1)
+            _p2oi += 1
+
+
+
+// ════════════════════════════════════════════════════════════════════
+//// SECTION 8 — KNN PREDICTION (K=6, Gaussian conviction %)
+// For each bar, find the K nearest LABELLED samples in the same regime.
+// Conviction % = Gaussian-weighted sum of (label × direction quality)
+// normalised to [0, 100], split into bull and bear fractions.
+// ════════════════════════════════════════════════════════════════════
+int _p2Len = array.size(p2_lbl)
+
+var float _p2BullP_last  = 50.0
+var float _p2BearP_last  = 50.0
+var float _p2Conf_last   = 0.0
+var float _p2Avg_last    = 0.5
+var int   _p2Match_last  = 0
+// Conviction % (Gaussian-weighted outcome quality of K=6 neighbours)
+var float _p2Conviction  = 50.0
+
+bool _p2Needed = _p2Len >= i_knnK and i_knnOn and (bar_index % i_knnEvery == 0)
+
+if _p2Needed
+    // ── Load current feature weights ────────────────────────────────
+    float w0  = array.get(_activeWeights,  0), float w1  = array.get(_activeWeights,  1)
+    float w2  = array.get(_activeWeights,  2), float w3  = array.get(_activeWeights,  3)
+    float w4  = array.get(_activeWeights,  4), float w5  = array.get(_activeWeights,  5)
+    float w6  = array.get(_activeWeights,  6), float w7  = array.get(_activeWeights,  7)
+    float w8  = array.get(_activeWeights,  8), float w9  = array.get(_activeWeights,  9)
+    float w10 = array.get(_activeWeights, 10), float w11 = array.get(_activeWeights, 11)
+    float w12 = array.get(_activeWeights, 12), float w13 = array.get(_activeWeights, 13)
+    float w14 = array.get(_activeWeights, 14), float w15 = array.get(_activeWeights, 15)
+    float w16 = array.get(_activeWeights, 16), float w17 = array.get(_activeWeights, 17)
+
+    // ── KNN top-K heap ───────────────────────────────────────────────
+    int _dynK = hurstVal > 0.60 ? 10 : hurstVal < 0.45 ? 5 : i_knnK
+    int _knnK2 = math.min(_dynK, _p2Len)
+    float[] _kDist  = array.new_float(_knnK2, 1e9)
+    float[] _kLbl   = array.new_float(_knnK2, 0.5)
+    bool[]  _kDir   = array.new_bool (_knnK2, false)
+    float[] _kAge   = array.new_float(_knnK2, 9999.0)
+    float[] _kSessW = array.new_float(_knnK2, 1.0)
+    float[] _kHuntW = array.new_float(_knnK2, 1.0)
+
+    // ── Cached heap-max for O(1) insertion check ─────────────────────
+    float _predCachedMaxD = 1e9
+    int   _predCachedMaxI = 0
+    for _j2 = 0 to _p2Len - 1
+        if array.get(p2_lbl, _j2) == 0.5
+            continue
+        if array.get(p2_rgm, _j2) != _p2Regime
+            continue
+        // ── Weighted log-distance (18 features, adaptive weights) ───
+        float _d2 =
+          w0  * math.log(1.0+math.abs(_qf0  -array.get(p2_f0,  _j2)))*_kS0  +
+          w1  * math.log(1.0+math.abs(_qf2  -array.get(p2_f2,  _j2)))*_kS1  +
+          w2  * math.log(1.0+math.abs(_qf5  -array.get(p2_f5,  _j2)))*_kS2  +
+          w3  * math.log(1.0+math.abs(_qf7  -array.get(p2_f7,  _j2)))*_kS3  +
+          w4  * math.log(1.0+math.abs(_qf8  -array.get(p2_f8,  _j2)))*_kS4  +
+          w5  * math.log(1.0+math.abs(_qf9  -array.get(p2_f9,  _j2)))*_kS5  +
+          w6  * math.log(1.0+math.abs(_qf13 -array.get(p2_f13, _j2)))*_kS6  +
+          w7  * math.log(1.0+math.abs(_qf15 -array.get(p2_f15, _j2)))*_kS7  +
+          w8  * math.log(1.0+math.abs(_qfHz -array.get(p2_f24, _j2)))*_kS8  +
+          w9  * math.log(1.0+math.abs(_qf25 -array.get(p2_f25, _j2)))*_kS9  +
+          w10 * math.log(1.0+math.abs(_qf27 -array.get(p2_f27, _j2)))*_kS10 +
+          w11 * math.log(1.0+math.abs(_qf28 -array.get(p2_f28, _j2)))*_kS11 +
+          w12 * math.log(1.0+math.abs(_qfA  -array.get(p2_fA,  _j2)))*_kS12 +
+          w13 * math.log(1.0+math.abs(_qfB  -array.get(p2_fB,  _j2)))*_kS13 +
+          w14 * math.log(1.0+math.abs(_qfC  -array.get(p2_fC,  _j2)))*_kS14 +
+          w15 * math.log(1.0+math.abs(_qfD  -array.get(p2_fD,  _j2)))*_kS15 +
+          w16 * math.log(1.0+math.abs(_qfE  -array.get(p2_fE,  _j2)))*_kS16 +
+          w17 * math.log(1.0+math.abs(_qfV  -array.get(p2_fV,  _j2)))*_kS17
+
+        float _p2Age = float(_p2Len - 1 - _j2)
+
+        // Insert into top-K heap
+        // Insert into top-K heap (cached max — no inner loop unless replaced)
+        if _d2 < _predCachedMaxD
+            array.set(_kDist,  _predCachedMaxI, _d2)
+            array.set(_kLbl,   _predCachedMaxI, array.get(p2_lbl, _j2))
+            array.set(_kDir,   _predCachedMaxI, array.get(p2_dir, _j2))
+            array.set(_kAge,   _predCachedMaxI, _p2Age)
+            array.set(_kSessW, _predCachedMaxI, array.get(p2_f25, _j2))
+            array.set(_kHuntW, _predCachedMaxI, array.get(p2_f24, _j2))
+            // Replacement happened — rescan heap to update cached max
+            _predCachedMaxD := array.get(_kDist, 0)
+            _predCachedMaxI := 0
+            for _m = 1 to _knnK2 - 1
+                if array.get(_kDist, _m) > _predCachedMaxD
+                    _predCachedMaxD := array.get(_kDist, _m)
+                    _predCachedMaxI := _m
+
+    // ── Gaussian conviction (σ = 0.5) — bull / bear split ────────────
+    // Conviction % = Gaussian-weighted outcome quality from K neighbours
+    // Bull conviction:  neighbours where price went UP
+    // Bear conviction:  neighbours where price went DOWN
+    float _bullGW = 0.0, float _bearGW = 0.0
+    float _bullQL = 0.0, float _bearQL = 0.0   // quality × weight sums
+    float _totalW = 0.0
+    int   _nMatched = 0
+// Old: float _sigma = 0.5
+    float _sigma = math.max(array.get(sigmaPerRegime, math.min(_p2Regime, 161)), 0.1)
+
+    if array.size(_kLbl) > 0
+        for _n = 0 to array.size(_kLbl) - 1
+            float _lbl    = array.get(_kLbl, _n)
+            bool  _isBull = array.get(_kDir, _n)
+            float _dist   = array.get(_kDist, _n)
+            if _dist >= 1e8
+                continue   // unfilled heap slot
+            _nMatched += 1
+
+            // Gaussian kernel: closer neighbour = higher weight
+            float _gw = math.exp(-_dist * _dist / (2.0 * _sigma * _sigma))
+
+            // Recency bonus: recent neighbours weighted more
+            float _ageW = array.get(_kAge, _n) < 50 ? 1.5 :
+                          array.get(_kAge, _n) < 150 ? 1.0 : 0.8
+
+            // Session-quality alignment bonus
+            float _sW = math.abs(_qf25 - array.get(_kSessW, _n)) < 0.20 ?
+                         (array.get(_kSessW, _n) >= 0.80 ? 1.5 : 1.1) : 0.7
+
+            // Hunt-zone context weight: samples from hunt zone match
+            float _hW = array.get(_kHuntW, _n) > 0.5 ? 1.5 : 1.0
+
+            float _tw = _gw * _ageW * _sW * _hW
+
+            if _isBull
+                _bullQL += _lbl * _tw
+                _bullGW += _tw
+            else
+                _bearQL += _lbl * _tw
+                _bearGW += _tw
+            _totalW += _tw
+
+        _p2Match_last := _nMatched
+
+    if _totalW > 0
+        float _totalQ    = _bullQL + _bearQL
+        // p2BullP / p2BearP: share of Gaussian-weighted quality
+        _p2BullP_last   := _totalQ > 0 ? (_bullQL / _totalQ) * 100.0 : 50.0
+        _p2BearP_last   := _totalQ > 0 ? (_bearQL / _totalQ) * 100.0 : 50.0
+        // Conviction %: how decisive is the dominant side?
+        // = max(bullQ, bearQ) / totalQ × 100  → range [50, 100]
+        _p2Conviction   := math.max(_p2BullP_last, _p2BearP_last)
+        // Conf: normalised edge in range [0, 1]
+        _p2Conf_last    := math.abs(_p2BullP_last - _p2BearP_last) / 100.0
+        // Average outcome quality of K neighbours
+        _p2Avg_last     := _totalW > 0 ? (_bullQL + _bearQL) / _totalW : 0.5
+
+//// ── Expose prediction outputs ────────────────────────────────────────
+//// Used by _knnFlowConflict check and HUD row 3.
+float p2BullP  = _p2BullP_last
+float p2BearP  = _p2BearP_last
+float p2Conf   = _p2Conf_last
+float p2AvgLbl = _p2Avg_last
+var bool _knnPredBull2 = true
+_knnPredBull2 := p2BullP >= p2BearP
+// Conviction % — the Gaussian-weighted dominant-direction quality
+float p2ConvictPct = _p2Conviction   // range 50-100 when valid
+// v14.8: direction-aware Platt lookup (6-way: regime × bull/bear)
+int   _plattPredIdx  = _macroRgm * 2 + (_knnPredBull2 ? 0 : 1)
+float _pAuse = array.get(_plattA, _plattPredIdx)
+float _pBuse = array.get(_plattB, _plattPredIdx)
+float _knnLogit = _pAuse * (_knnPredBull2 ? p2BullP : p2BearP) / 100.0 + _pBuse
+bool  _p2CalibReady = array.get(_plattN, _plattPredIdx) >= 20
+float p2CalibProb = _p2CalibReady ? 1.0/(1.0+math.exp(-_knnLogit))*100.0 :
+                     (_knnPredBull2 ? p2BullP : p2BearP)
+//float p2CalibProb = _plattN >= 20 ?
+//                         1.0 / (1.0 + math.exp(-_knnLogit)) * 100.0 :
+//                         (_knnPredBull2 ? p2BullP : p2BearP)
+string p2QualTag = p2AvgLbl >= 0.70 ? "High-RR" :
+                   p2AvgLbl >= 0.50 ? "Good"    :
+                   p2AvgLbl >= 0.35 ? "Marginal" : "Poor"
+float _knnQualAdapt = i_knnMinQual + (hurstVal < 0.45 ? 0.08 : hurstVal > 0.60 ? -0.05 : 0.0)
+_knnQualAdapt := math.max(math.min(_knnQualAdapt, 0.65), 0.20)
+bool knnQualGate = p2AvgLbl >= _knnQualAdapt   // replaces line 1574
+//
+float p2BonusL = i_knnOn and p2Conf >= 0.5 and tDir == 1  and
+                 p2BullP > p2BearP and knnQualGate ?
+                 math.min((p2Conf - 0.5) * 2.0 * 15.0, 15.0) : 0.0
+float p2BonusS = i_knnOn and p2Conf >= 0.5 and tDir == -1 and
+                 p2BearP >= p2BullP and knnQualGate ?
+                 math.min((p2Conf - 0.5) * 2.0 * 15.0, 15.0) : 0.0
+
+// [FIX 3]: _knnPredBull2 at GLOBAL scope (was only in HUD block → undefined)
+
+
+// Snapshot latest signal probability into the most-recent buffer entry
+if array.size(p2_sig) > 0
+    array.set(p2_sig, array.size(p2_sig) - 1,
+              math.max(p2BullP, p2BearP))
+
+// ═════════════════════════════════════════════════════════════════════
+// END OF KNN REPLACEMENT BLOCK
+// The remainder of the script (Dynamic Weight Calibrator, Gate Stack,
+// HUD, etc.) continues unchanged from your original file.
+//
+// ONE CHANGE NEEDED IN HUD SECTION (~line 2650):
+//   Old: bool _knnPredBull2hud = p2BullP >= p2BearP
+//   New: bool _knnPredBull2hud = _knnPredBull2    ← just reference it
+//
+// ONE CHANGE NEEDED IN HUD ROW 3 (~line 2977-2978):
+//   The _knnPredStr already references p2BullP/p2BearP/p2Conf/p2AvgLbl
+//   which are all still defined above — no change needed there.
+//   Optionally add conviction display:
+//     "Conv:"+str.tostring(math.round(p2ConvictPct))+"% " before _knnQualWord
+// ═════════════════════════════════════════════════════════════════════
+
+
+//float p2BullP  = _p2BullP_last
+//float p2BearP  = _p2BearP_last
+////float p2Conf   = _p2Conf_last
+//float p2AvgLbl = _p2Avg_last
+
+//string p2QualTag = p2AvgLbl >= 0.70 ? "High-RR" : p2AvgLbl >= 0.50 ? "Good" : p2AvgLbl >= 0.35 ? "Marginal" : "Poor"
+//bool knnQualGate = p2AvgLbl >= i_knnMinQual
+//float p2BonusL = i_knnOn and p2Conf >= 0.5 and tDir == 1  and p2BullP > p2BearP and knnQualGate ? math.min((p2Conf - 0.5) * 2.0 * 15.0, 15.0) : 0.0
+////float p2BonusS = i_knnOn and p2Conf >= 0.5 and tDir == -1 and p2BullP > p2BearP and knnQualGate ? math.min((p2Conf - 0.5) * 2.0 * 15.0, 15.0) : 0.0
+
+// ════════════════════════════════════════════════════════════════════
+// DYNAMIC WEIGHT CALIBRATOR & PROBABILITY ENGINE
+// ════════════════════════════════════════════════════════════════════
+int CT_MAX = math.min(i_ctMax, 60)
+var float[] ct_huntP   = array.new_float(), var float[] ct_trendP  = array.new_float()
+var float[] ct_absorbP = array.new_float(), var int[]   ct_sessID  = array.new_int()
+var float[] ct_outcome = array.new_float()
+var float wH = 0.35, var float wT = 0.35, var float wA = 0.20
+var int[]   _ctPendIdxQ  = array.new_int(),  var float[] _ctPendTPQ  = array.new_float()
+var float[] _ctPendSLQ   = array.new_float(), var bool[]  _ctPendLongQ = array.new_bool()
+
+if bar_index % 5 == 0 and i_knnOn
+    float _wHa=0., float _wTa=0., float _wAa=0.
+    int _ctCl = 0
+    if array.size(ct_outcome) > 0
+        for _ci = 0 to array.size(ct_outcome)-1
+            if array.get(ct_outcome,_ci) != 0.5
+                _ctCl += 1
+                float _s = math.max(array.get(ct_huntP,_ci)+array.get(ct_trendP,_ci)+array.get(ct_absorbP,_ci),1.0)
+                if array.get(ct_outcome,_ci) >= 1.0
+                    _wHa += array.get(ct_huntP,_ci)/_s, _wTa += array.get(ct_trendP,_ci)/_s, _wAa += array.get(ct_absorbP,_ci)/_s
+    if _ctCl >= 10
+        float _wS  = math.max(_wHa+_wTa+_wAa,0.001)
+        float _wHr = math.max(math.min((_wHa/_wS)*0.90,0.60),0.10)
+        float _wTr = math.max(math.min((_wTa/_wS)*0.90,0.60),0.10)
+        float _wAr = math.max(math.min((_wAa/_wS)*0.90,0.60),0.10)
+        float _wN2 = _wHr+_wTr+_wAr
+        wH := wH*0.85+(_wHr/_wN2*0.90)*0.15
+        wT := wT*0.85+(_wTr/_wN2*0.90)*0.15
+        wA := wA*0.85+(_wAr/_wN2*0.90)*0.15
+
+float _wrWins=0., float _wrTotal=0.
+if _svSlot >= 0 and array.size(ct_outcome)>0
+    for _wi2=0 to array.size(ct_outcome)-1
+        if array.get(ct_sessID,_wi2)==_svSlot and array.get(ct_outcome,_wi2) != 0.5
+            _wrTotal += 1.0
+            if array.get(ct_outcome,_wi2) >= 1.0
+                _wrWins += 1.0
+float sessionWR = _wrTotal >= 3 ? math.round(_wrWins/_wrTotal*100) : na
+
+if array.size(_ctPendIdxQ) > 0
+    int _cqi=0
+    while _cqi < array.size(_ctPendIdxQ)
+        int _cpIdx = array.get(_ctPendIdxQ,_cqi)
+        if _cpIdx >= 0 and _cpIdx < array.size(ct_outcome)
+            if array.get(ct_outcome,_cpIdx)==0.5
+                bool _ctTP = array.get(_ctPendLongQ,_cqi) ? high>=array.get(_ctPendTPQ,_cqi) : low<=array.get(_ctPendTPQ,_cqi)
+                bool _ctSL = array.get(_ctPendLongQ,_cqi) ? low<=array.get(_ctPendSLQ,_cqi)  : high>=array.get(_ctPendSLQ,_cqi)
+                if _ctTP or _ctSL
+                    array.set(ct_outcome,_cpIdx,_ctTP?1.0:0.0)
+                    array.remove(_ctPendIdxQ,_cqi), array.remove(_ctPendTPQ,_cqi)
+                    array.remove(_ctPendSLQ, _cqi), array.remove(_ctPendLongQ,_cqi)
+                    _cqi -= 1
+        else
+            array.remove(_ctPendIdxQ,_cqi), array.remove(_ctPendTPQ,_cqi)
+            array.remove(_ctPendSLQ, _cqi), array.remove(_ctPendLongQ,_cqi)
+            _cqi -= 1
+        _cqi += 1
+
+float _wHuse = i_knnOn ? wH : 0.35
+float _wTuse = i_knnOn ? wT : 0.35
+float _wAuse = i_knnOn ? wA : 0.20
+
+if hurstVal > 0.60
+    _wTuse := math.max(_wTuse * 1.5, 0.60)
+    _wHuse := _wHuse * 0.20
+else if hurstVal < 0.45
+    _wHuse := math.max(_wHuse * 1.5, 0.60)
+    _wTuse := _wTuse * 0.20
+
+float huntProbLongF2  = math.min(huntProbLong  + (iofiBullCross?5.:iofiDivBull?10.:0.), 100.0)
+float huntProbShortF2 = math.min(huntProbShort + (iofiBearCross?5.:iofiDivBear?10.:0.), 100.0)
+// v14.8: absorbProbLong/Short and trendProbLong/Short removed — unused in signal path
+
+//float rawLong  = (huntProbLongF2  * _wHuse) + (trendProbLong  * _wTuse) + (absorbProbLong  * _wAuse) + exhaustBonusL + p2BonusL
+//float rawShort = (huntProbShortF2 * _wHuse) + (trendProbShort * _wTuse) + (absorbProbShort * _wAuse) + exhaustBonusS + p2BonusS
+
+// Use KNN probability as the core directional bias
+// Old (lines 1651–1652):
+//float knnBullProb = p2BullP / 100.0
+//float knnBearProb = p2BearP / 100.0
+
+// New:
+float knnBullProb = p2BullP >= p2BearP ? p2CalibProb / 100.0 : p2BullP / 100.0
+float knnBearProb = p2BearP >  p2BullP ? p2CalibProb / 100.0 : p2BearP / 100.0
+
+// Use only the most reliable SMC signals as boosts
+float smcBoostLong = (huntDoneBull or inPostSweepWindowL) ? 0.20 : (bullBOS) ? 0.15 : 0.0
+float smcBoostShort = (huntDoneBear or inPostSweepWindowS) ? 0.20 : (bearBOS) ? 0.15 : 0.0
+
+// Combine
+float rawLong = knnBullProb + smcBoostLong
+float rawShort = knnBearProb + smcBoostShort
+
+float signalProbLong  = math.max(math.min(rawLong  * sessMult * (htfBull and htf15Up ? 1.0 : htfBull or htf15Up ? 0.75 : 0.4) , 100.0), 0.0)
+float signalProbShort = math.max(math.min(rawShort * sessMult * (htfBear and htf15Dn ? 1.0 : htfBear or htf15Dn ? 0.75 : 0.4) , 100.0), 0.0)
+
+if array.size(p2_sig) > 0
+    array.set(p2_sig, array.size(p2_sig) - 1, math.max(signalProbLong, signalProbShort))
+
+int probLongDisp  = math.round(signalProbLong)
+int probShortDisp = math.round(signalProbShort)
+
+// ════════════════════════════════════════════════════════════════════
+// KNN-OB GUIDED TP SYSTEM
+// ════════════════════════════════════════════════════════════════════
+// Pool-score SL tightener — if liquidity is dense, reversal should be sharp
+float _slTightener  = _poolScoreMax ? 0.70 :   // Packed ⚡ — tightest, reversal must be immediate
+                      _poolScoreHi  ? 0.85 :   // Dense ★  — moderate tighten, some room
+                      1.0                       // Loaded/Thin — standard ATR SL unchanged
+float dynSLLong  = close - atr14 * i_slAtr * _slTightener
+float dynSLShort = close + atr14 * i_slAtr * _slTightener
+
+float dynSLDistL = math.max(close - dynSLLong,  atr14 * 0.1)
+float dynSLDistS = math.max(dynSLShort - close, atr14 * 0.1)
+
+int _knnRR3=0, int _knnRR2=0, int _knnRR1=0, int _knnLoss=0
+int _knnSz = array.size(p2_lbl)
+if _knnSz > 0
+    for _ki = 0 to _knnSz - 1
+        if array.get(p2_rgm, _ki) == _p2Regime
+            float _kl = array.get(p2_lbl, _ki)
+            if _kl == 0.5
+                continue
+            if _kl >= 1.00
+                _knnRR3 += 1
+            else if _kl >= 0.70
+                _knnRR2 += 1
+            else if _kl >= 0.20
+                _knnRR1 += 1
+            else
+                _knnLoss += 1
+
+int   _knnTotal = _knnRR3 + _knnRR2 + _knnRR1 + _knnLoss
+bool  _knnReady = _knnTotal >= 10
+float _knnR3ratio = _knnTotal > 0 ? float(_knnRR3)            / float(_knnTotal) : 0.0
+float _knnR2ratio = _knnTotal > 0 ? float(_knnRR3 + _knnRR2) / float(_knnTotal) : 0.0
+bool  _knnSupR3 = _knnReady and _knnR3ratio >= 0.35
+bool  _knnSupR2 = _knnReady and _knnR2ratio >= 0.35
+
+float _obTPLong=na, float _obTPShort=na, float _obRRLong=0.0, float _obRRShort=0.0
+string _obTPLongStr="", string _obTPShortStr=""
+
+if array.size(ob_bx) > 0
+    float _nearAbove = 999999.0, float _nearBelow = 0.0
+    for _oi = array.size(ob_bx) - 1 to 0
+        bool  _oIsB = array.get(ob_bull, _oi)
+        float _oTop = array.get(ob_top,  _oi)
+        float _oBot = array.get(ob_bot,  _oi)
+        bool  _oMit = array.get(ob_mit,  _oi)
+        if _oMit
+            continue
+        if not _oIsB and _oBot > close and _oBot < _nearAbove
+            _nearAbove := _oBot, _obTPLong  := _oBot
+            _obRRLong  := dynSLDistL > 0 ? (_obTPLong - close) / dynSLDistL : 0.0
+        if _oIsB and _oTop < close and _oTop > _nearBelow
+            _nearBelow := _oTop, _obTPShort := _oTop
+            _obRRShort := dynSLDistS > 0 ? (close - _obTPShort) / dynSLDistS : 0.0
+
+bool _obValidLong  = not na(_obTPLong)  and _obRRLong  >= 1.0
+bool _obValidShort = not na(_obTPShort) and _obRRShort >= 1.0
+
+if _obValidLong
+    _obTPLongStr := str.tostring(math.round(_obRRLong * 10) / 10) + "R OB"
+else if not na(_obTPLong)
+    _obTPLongStr := "OB blocks — RR " + str.tostring(math.round(_obRRLong * 10) / 10)
+else
+    _obTPLongStr := "No OB above price"
+
+if _obValidShort
+    _obTPShortStr := str.tostring(math.round(_obRRShort * 10) / 10) + "R OB"
+else if not na(_obTPShort)
+    _obTPShortStr := "OB blocks — RR " + str.tostring(math.round(_obRRShort * 10) / 10)
+else
+    _obTPShortStr := "No OB below price"
+
+float _tgtLong  = _obValidLong  ? _obTPLong  : na
+float _tgtShort = _obValidShort ? _obTPShort : na
+
+float _obPoolTol = atr14 * 1.0
+bool _obMatchWkL = _obValidLong  and not na(pwH) and math.abs(_obTPLong  - pwH) <= _obPoolTol
+bool _obMatchMoL = _obValidLong  and not na(pmH) and math.abs(_obTPLong  - pmH) <= _obPoolTol
+bool _obMatchPDL = _obValidLong  and not na(pdH) and math.abs(_obTPLong  - pdH) <= _obPoolTol
+bool _obMatchWkS = _obValidShort and not na(pwL) and math.abs(_obTPShort - pwL) <= _obPoolTol
+bool _obMatchMoS = _obValidShort and not na(pmL) and math.abs(_obTPShort - pmL) <= _obPoolTol
+bool _obMatchPDS = _obValidShort and not na(pdL) and math.abs(_obTPShort - pdL) <= _obPoolTol
+
+float _confBonusL = (_obMatchWkL or _obMatchMoL) ? 15.0 : _obMatchPDL ? 10.0 : 0.0
+float _confBonusS = (_obMatchWkS or _obMatchMoS) ? 15.0 : _obMatchPDS ? 10.0 : 0.0
+
+signalProbLong  := math.min(signalProbLong  + _confBonusL, 100.0)
+signalProbShort := math.min(signalProbShort + _confBonusS, 100.0)
+probLongDisp    := math.round(signalProbLong)
+probShortDisp   := math.round(signalProbShort)
+
+string _confTagL = (_obMatchWkL or _obMatchMoL) ? "+Wk" : _obMatchPDL ? "+PD" : ""
+string _confTagS = (_obMatchWkS or _obMatchMoS) ? "+Wk" : _obMatchPDS ? "+PD" : ""
+
+if _obValidLong  and _confTagL != ""
+    _obTPLongStr  := str.tostring(math.round(_obRRLong  * 10) / 10) + "R OB" + _confTagL
+if _obValidShort and _confTagS != ""
+    _obTPShortStr := str.tostring(math.round(_obRRShort * 10) / 10) + "R OB" + _confTagS
+
+string htfPoolBullLabel = _obTPLongStr
+string htfPoolBearLabel = _obTPShortStr
+
+float dynTPDistL = math.max(_tgtLong  - close, atr14 * 0.1)
+float dynTPDistS = math.max(close - _tgtShort, atr14 * 0.1)
+float dynRRLong  = dynSLDistL > 0 ? dynTPDistL / dynSLDistL : 0.0
+float dynRRShort = dynSLDistS > 0 ? dynTPDistS / dynSLDistS : 0.0
+bool  rrGateLong  = dynRRLong  >= i_minRR
+bool  rrGateShort = dynRRShort >= i_minRR
+string rrStrL = str.tostring(math.round(dynRRLong  * 10) / 10) + ":1"
+string rrStrS = str.tostring(math.round(dynRRShort * 10) / 10) + ":1"
+// ════════════════════════════════════════════════════════════════════
+// THE GATE STACK
+// ════════════════════════════════════════════════════════════════════
+bool blkSess  = sessBlocked
+bool blkHunt  = huntDangerBull or huntDangerBear
+bool blkZone  = inHuntZone
+bool blkFake  = fakeBreakBull or fakeBreakBear
+bool anyBlock = blkSess or blkHunt or blkZone or blkFake
+bool  fractalOBStackBull     = false
+bool  fractalOBStackBear     = false
+float fractalOBStrengthLong  = 0.0
+float fractalOBStrengthShort = 0.0
+
+bool _locLong  = inBullOB or inBullFVG or nearBullOB or (tf5_bBOS  and nearBullOB)
+bool _locShort = inBearOB or inBearFVG or nearBearOB or (tf5_brBOS and nearBearOB)
+
+bool longRaw  = (zBull) and (absorpBull or zDivBull or iofiBullCross or vcoBullCross or cmpBull or cmpDivBull or volVcoBullCross or volVcoBullConf or (iofiBull and vcoBull)) and _locLong  and htfBull and htf15Up or (fractalOBStackBull and (huntDoneBull or inPostSweepWindowL) and volRatio >= 1.5)
+bool shortRaw = (zBear) and (absorpBear or zDivBear or iofiBearCross or vcoBearCross or cmpBear or cmpDivBear or volVcoBearCross or volVcoBearConf or (iofiBear and vcoBear)) and _locShort and htfBear and htf15Dn or (fractalOBStackBear and (huntDoneBear or inPostSweepWindowS) and volRatio >= 1.5)
+
+bool longSig  = (longRaw or (bigMoveScore >= 3)) and not anyBlock and instFlowGateLong  and rrGateLong  and knnQualGate and exhaustGateLong  and signalProbLong  >= _convictAdapt
+bool shortSig = shortRaw and not anyBlock and instFlowGateShort and rrGateShort and knnQualGate and exhaustGateShort and signalProbShort >= _convictAdapt
+
+// ════════════════════════════════════════════════════════════════════
+// SUPERSEDING LOGIC (Paste after signal generation around line 1875)
+// ════════════════════════════════════════════════════════════════════
+
+// This goes AFTER: bool longSig = ... and bool shortSig = ...
+// This goes BEFORE: bool sigHighLong = ...
+
+// BIG MOVE SUPERSEDES NORMAL SIGNALS
+if bigMoveScore >= 3 and i_bmEnable
+    // Boost signal conviction when big move detected
+    signalProbLong := math.max(signalProbLong, bigMoveConv)
+    signalProbShort := math.max(signalProbShort, bigMoveConv)
+    
+    // Widen TP targets for big moves
+    if longSig and not na(_tgtLong)
+        _tgtLong := math.max(_tgtLong, close + bigMoveMag)
+    else if longSig
+        _tgtLong := close + bigMoveMag
+        
+    if shortSig and not na(_tgtShort)
+        _tgtShort := math.min(_tgtShort, close - bigMoveMag)
+    else if shortSig
+        _tgtShort := close - bigMoveMag
+
+
+bool sigHighLong    = longSig  and signalProbLong  >= i_highThres
+bool sigStrongLong  = longSig  and signalProbLong  >= i_strongThres and not sigHighLong
+bool sigNormLong    = longSig  and not sigHighLong and not sigStrongLong
+bool sigHighShort   = shortSig and signalProbShort >= i_highThres
+bool sigStrongShort = shortSig and signalProbShort >= i_strongThres and not sigHighShort
+bool sigNormShort   = shortSig and not sigHighShort and not sigStrongShort
+
+
+
+// v14.8: lScore/sScore removed — were computed but never used downstream
+
+if (longSig or shortSig) and barstate.isconfirmed
+    if array.size(_pendIdxQ) < 5
+        array.push(_pendIdxQ, array.size(p2_lbl) - 1)
+        array.push(_pendTPQ,  longSig ? close + atr14 * i_tpAtr : close - atr14 * i_tpAtr)
+        array.push(_pendSLQ,  longSig ? dynSLLong : dynSLShort)
+        array.push(_pendLongQ, longSig)
+    array.push(ct_huntP,   longSig ? huntProbLong  : huntProbShort)
+    array.push(ct_trendP,  longSig ? ((bullMSS?25.:bullBOS?15.:trendUp?8.:0.)+(htfBull?15.:0.)) : ((bearMSS?25.:bearBOS?15.:trendDown?8.:0.)+(htfBear?15.:0.)))
+    array.push(ct_absorbP, longSig ? instFlowScoreLong * 0.50 : instFlowScoreShort * 0.50)
+    array.push(ct_sessID,  _svSlot >= 0 ? _svSlot : 0)
+    array.push(ct_outcome, 0.5)
+    if array.size(ct_outcome) > CT_MAX
+        array.shift(ct_huntP), array.shift(ct_trendP), array.shift(ct_absorbP)
+        array.shift(ct_sessID), array.shift(ct_outcome)
+    if array.size(_ctPendIdxQ) < 5
+        array.push(_ctPendIdxQ,  array.size(ct_outcome)-1)
+        array.push(_ctPendTPQ,   longSig ? close + atr14*i_tpAtr : close - atr14*i_tpAtr)
+        array.push(_ctPendSLQ,   longSig ? dynSLLong : dynSLShort)
+        array.push(_ctPendLongQ, longSig)
+
+var string[] reasons = array.new_string(0)
+array.clear(reasons)
+if blkSess
+    array.push(reasons, "Auction/Lunch")
+if blkZone
+    array.push(reasons, "Pre-Hunt Zone")
+if not (rrGateLong or rrGateShort)
+    array.push(reasons, "No OB ≥1R")
+if not (instFlowGateLong or instFlowGateShort)
+    array.push(reasons, "Flow <45")
+string blkWhy = array.size(reasons) > 0 ? "WAIT: " + array.join(reasons, " + ") : "Searching..."
+
+f_px(_p) => syminfo.mintick >= 1.0 ? str.tostring(math.round(_p)) : str.tostring(math.round(_p * 100) / 100, "#.##")
+
+var line _lineEntry=na, var line _lineSL=na, var line _lineTP=na
+var label _lblEntry=na,  var label _lblSL=na,  var label _lblTP=na
+if (longSig or shortSig) and barstate.isconfirmed
+    line.delete(_lineEntry), line.delete(_lineSL), line.delete(_lineTP)
+    label.delete(_lblEntry), label.delete(_lblSL), label.delete(_lblTP)
+    float _ePx  = close
+    float _slPx = longSig ? dynSLLong  : dynSLShort
+    float _tpPx = longSig ? _tgtLong   : _tgtShort
+    _lineEntry := line.new(bar_index, _ePx,  bar_index+40, _ePx,  color=color.new(#FFFFFF,40), style=line.style_dashed, width=1)
+    _lineSL    := line.new(bar_index, _slPx, bar_index+40, _slPx, color=color.new(c_bear,20),  style=line.style_solid,  width=1)
+    _lineTP    := line.new(bar_index, _tpPx, bar_index+40, _tpPx, color=color.new(c_bull,20),  style=line.style_solid,  width=1)
+    _lblEntry  := label.new(bar_index+40, _ePx,  "E "  + f_px(_ePx),  color=color.new(#FFFFFF,80), textcolor=color.white,         style=label.style_label_left, size=size.small)
+    _lblSL     := label.new(bar_index+40, _slPx, "SL " + f_px(_slPx), color=color.new(c_bear,75),  textcolor=color.new(c_bear,0), style=label.style_label_left, size=size.small)
+    _lblTP     := label.new(bar_index+40, _tpPx, "TP " + f_px(_tpPx), color=color.new(c_bull,75),  textcolor=color.new(c_bull,0), style=label.style_label_left, size=size.small)
+
+plotshape(longSig  and sigHighLong,    "BUY ⚡",  shape.triangleup,   location.belowbar, color.new(c_bull,0), size=size.normal, text="⚡B")
+plotshape(longSig  and sigStrongLong,  "BUY ★",   shape.triangleup,   location.belowbar, color.new(c_bull,0), size=size.small,  text="★B")
+plotshape(longSig  and sigNormLong,    "BUY",     shape.triangleup,   location.belowbar, color.new(c_bull,0), size=size.small,  text="B")
+plotshape(shortSig and sigHighShort,   "SELL ⚡",  shape.triangledown, location.abovebar, color.new(c_bear,0), size=size.normal, text="⚡S")
+plotshape(shortSig and sigStrongShort, "SELL ★",   shape.triangledown, location.abovebar, color.new(c_bear,0), size=size.small,  text="★S")
+plotshape(shortSig and sigNormShort,   "SELL",    shape.triangledown, location.abovebar, color.new(c_bear,0), size=size.small,  text="S")
+
+plotshape(inHuntZone and not anyBlock,                         "Pre-Hunt",  shape.diamond,  location.abovebar, color.new(c_gold,0),    size=size.tiny, text="Hz")
+plotshape(huntDangerBull or huntDangerBear,                    "Sweeping",  shape.xcross,   location.abovebar, color.new(c_bear,0),    size=size.tiny)
+plotshape((inPostSweepWindowL or inPostSweepWindowS) and not longSig and not shortSig, "Post-Sweep", shape.circle, location.belowbar, color.new(c_teal,40), size=size.tiny)
+
+bgcolor(inHuntZone ? color.new(c_gold, 97) : na, title="Hunt zone")
+
+// ════════════════════════════════════════════════════════════════════
+// EDGE SIGNALS — Gap Fill · Fractal Confluence · Micro-Structure
+// ════════════════════════════════════════════════════════════════════
+float _gapSize  = not na(pdClose) ? math.abs(open - pdClose) : 0.0
+float _gapATR   = _gapSize / math.max(atr14, syminfo.mintick)
+bool  _gapUp    = not na(pdClose) and open > pdClose + atr14 * 0.15
+bool  _gapDown  = not na(pdClose) and open < pdClose - atr14 * 0.15
+bool  _gapActive = (_gapUp or _gapDown) and _gapATR >= 0.15 and sessBars <= 60
+float _gapTarget = not na(pdClose) ? pdClose : na
+bool  _gapFilled = not na(pdClose) and ((_gapUp and low <= pdClose) or (_gapDown and high >= pdClose))
+bool  _gapBiasLong  = _gapActive and _gapDown and not _gapFilled
+bool  _gapBiasShort = _gapActive and _gapUp   and not _gapFilled
+string _gapLabel = _gapActive ?
+         (_gapUp ? "Gap up " : "Gap down ") + str.tostring(math.round(_gapATR * 10) / 10) + "ATR — price likely fills to " + (not na(_gapTarget) ? str.tostring(math.round(_gapTarget * 100) / 100) : "─") :
+         _gapFilled ? "Gap filled — bias gone" : "No gap today"
+
+float _tol = atr14 * 0.25
+float _ob1mBullMid  = not na(nearestBullOB) ? nearestBullOB - atr14 * 0.3 : na
+float _ob5mBullMid  = not na(htf5_obLow)    ? htf5_obLow    : na
+float _ob15mBullMid = not na(htf15_obLow2)  ? htf15_obLow2  : na
+
+// ── Fractal OB stack (multi‑timeframe OB alignment) ────────────────
+fractalOBStackBull     := false
+fractalOBStackBear     := false
+fractalOBStrengthLong  := 0.0
+fractalOBStrengthShort := 0.0
+
+longRaw  := (zBull) and (absorpBull or zDivBull or iofiBullCross or vcoBullCross or cmpBull or cmpDivBull or volVcoBullCross or volVcoBullConf or (iofiBull and vcoBull)) and _locLong  and htfBull and htf15Up or (fractalOBStackBull and (huntDoneBull or inPostSweepWindowL) and volRatio >= 1.5)
+shortRaw := (zBear) and (absorpBear or zDivBear or iofiBearCross or vcoBearCross or cmpBear or cmpDivBear or volVcoBearCross or volVcoBearConf or (iofiBear and vcoBear)) and _locShort and htfBear and htf15Dn or (fractalOBStackBear and (huntDoneBear or inPostSweepWindowS) and volRatio >= 1.5)
+longSig  := longRaw  and not anyBlock and instFlowGateLong  and rrGateLong  and knnQualGate and exhaustGateLong  and signalProbLong  >= _convictAdapt
+shortSig := shortRaw and not anyBlock and instFlowGateShort and rrGateShort and knnQualGate and exhaustGateShort and signalProbShort >= _convictAdapt
+
+if inBullOB and htf5_obLow > htf15_obLow2 - atr14*0.2 and htf5_obLow < htf15_obLow2 + atr14*0.2
+    fractalOBStackBull := true
+    fractalOBStrengthLong := obStrengthLong + (htf5_volR >= 1.2 ? 1 : 0) + (htf15_volR >= 1.2 ? 1 : 0)
+
+if inBearOB and htf5_obHigh < htf15_obHigh2 + atr14*0.2 and htf5_obHigh > htf15_obHigh2 - atr14*0.2
+    fractalOBStackBear := true
+    fractalOBStrengthShort := obStrengthShort + (htf5_volR >= 1.2 ? 1 : 0) + (htf15_volR >= 1.2 ? 1 : 0)
+
+bool  _fractalBull  = not na(_ob1mBullMid) and not na(_ob5mBullMid) and not na(_ob15mBullMid) and
+                      math.abs(_ob1mBullMid - _ob5mBullMid) <= _tol and math.abs(_ob1mBullMid - _ob15mBullMid) <= _tol
+float _ob1mBearMid  = not na(nearestBearOB) ? nearestBearOB + atr14 * 0.3 : na
+float _ob5mBearMid  = not na(htf5_obHigh)   ? htf5_obHigh   : na
+float _ob15mBearMid = not na(htf15_obHigh2) ? htf15_obHigh2 : na
+bool  _fractalBear  = not na(_ob1mBearMid) and not na(_ob5mBearMid) and not na(_ob15mBearMid) and
+                      math.abs(_ob1mBearMid - _ob5mBearMid) <= _tol and math.abs(_ob1mBearMid - _ob15mBearMid) <= _tol
+color _fractalCol = _fractalBull and _fractalBear ? color.new(c_gold,0) : _fractalBull ? color.new(c_bull,0) : _fractalBear ? color.new(c_bear,0) : color.new(c_sub,0)
+
+var int   _microPatternScore = 0
+var int   _microBarCount     = 0
+var bool  _microIsLong       = false
+var bool  _microEngulfSeen   = false
+var bool  _microInsideSeen   = false
+
+if huntDoneBull or huntDoneBear
+    _microPatternScore := 0, _microBarCount := 0, _microIsLong := huntDoneBull
+    _microEngulfSeen := false, _microInsideSeen := false
+
+if _microBarCount > 0 and _microBarCount <= 3
+    bool _isEngulf = _microIsLong ? (close>open and close>high[1] and low>low[1])   : (close<open and close<low[1] and high<high[1])
+    bool _isInside = high <= high[1] and low >= low[1]
+    bool _isBrk    = _microIsLong ? (close > high[1]) : (close < low[1])
+    bool _isPin    = _microIsLong ? ((low-math.min(open,close)) > math.abs(close-open)*2.5 and close>open) : ((math.max(open,close)-high) > math.abs(close-open)*2.5 and close<open)
+    if _microBarCount == 1
+        if _isEngulf
+            _microEngulfSeen := true, _microPatternScore := 1
+        else if _isPin
+            _microPatternScore := 1
+    if _microBarCount == 2 and _microEngulfSeen
+        if _isInside
+            _microInsideSeen := true, _microPatternScore := 2
+        else if _isBrk
+            _microPatternScore := 2
+    if _microBarCount == 3 and _microEngulfSeen and _microInsideSeen
+        if _isBrk
+            _microPatternScore := 3
+
+if huntDoneBull or huntDoneBear
+    _microBarCount := 1
+else if _microBarCount > 0 and _microBarCount < 4
+    _microBarCount += 1
+
+string _microStr = _microBarCount > 0 and _microBarCount <= 4 ?
+         (_microPatternScore == 3 ? "Perfect reversal — enter now ⚡" :
+         _microPatternScore == 2  ? "Strong reversal — enter ★" :
+         _microPatternScore == 1  ? "Early reversal — wait 1 more bar" :
+         "Sweep done, watching bar " + str.tostring(_microBarCount) + "/3") :
+         (huntDoneBull or huntDoneBear) ? "Sweep just completed" : "─"
+color _microCol = _microPatternScore == 3 ? color.new(c_bull,0) : _microPatternScore == 2 ? color.new(c_teal,0) : _microPatternScore == 1 ? color.new(c_orange,0) : color.new(c_sub,0)
+
+bool _comboA_L = vsaEffortFail and close < open  and (huntDoneBull or inPostSweepWindowL)
+bool _comboA_S = vsaEffortFail and close >= open and (huntDoneBear or inPostSweepWindowS)
+bool _comboB_L = vsaBullActive and iofiBull
+bool _comboB_S = vsaBearActive and iofiBear
+bool _comboC_L = vsaStopVol   and (inBullOB or nearBullOB)
+bool _comboC_S = vsaNoDemand  and (inBearOB or nearBearOB)
+bool _comboD_L = vsaBullActive and _fractalBull
+bool _comboD_S = vsaBearActive and _fractalBear
+
+bool _anyComboL = _comboA_L or _comboB_L or _comboC_L or _comboD_L
+bool _anyComboS = _comboA_S or _comboB_S or _comboC_S or _comboD_S
+
+string _comboBadgeL = _comboA_L ? "Hidden buying after sweep ⚡" : _comboC_L ? "Institutions absorbing at OB ⚡" : _comboD_L ? "All timeframes + VSA agree ★" : _comboB_L ? "VSA + flow both bullish ★" : ""
+string _comboBadgeS = _comboA_S ? "Hidden selling after sweep ⚡" : _comboC_S ? "Institutions distributing at OB ⚡" : _comboD_S ? "All timeframes + VSA agree ★" : _comboB_S ? "VSA + flow both bearish ★" : ""
+color _comboBadgeColL = (_comboA_L or _comboC_L) ? color.new(c_bull,0) : (_comboD_L or _comboB_L) ? color.new(c_teal,0) : color.new(c_sub,0)
+color _comboBadgeColS = (_comboA_S or _comboC_S) ? color.new(c_bear,0) : (_comboD_S or _comboB_S) ? color.new(c_orange,0) : color.new(c_sub,0)
+
+int _edgeScore = (_gapBiasLong or _gapBiasShort ? 1 : 0) + (_fractalBull or _fractalBear ? 2 : 0) + _microPatternScore
+string _edgeLabel = _edgeScore >= 4 ? "EDGE ⚡" : _edgeScore >= 2 ? "Edge ★" : "Edge"
+
+string _gapTag     = _gapBiasLong ? "Gap↓" : _gapBiasShort ? "Gap↑" : _gapFilled ? "Gap✓" : ""
+string _fractalTag = _fractalBull and _fractalBear ? "F+C✓" : _fractalBull ? "Floor✓" : _fractalBear ? "Ceil✓" : ""
+string _contextTag = _gapTag != "" and _fractalTag != "" ? " · " + _gapTag + " · " + _fractalTag : _gapTag != "" ? " · " + _gapTag : _fractalTag != "" ? " · " + _fractalTag : ""
+string _comboBase  = _comboA_L ? "Hidden buy · sweep↑" : _comboA_S ? "Hidden sell · sweep↓" : _comboC_L ? "Inst absorb · OB sup" : _comboC_S ? "Inst sell · OB res" : _comboD_L ? "Bull · 3TF floor" : _comboD_S ? "Bear · 3TF ceil" : _comboB_L ? "Vol+Flow ↑" : _comboB_S ? "Vol+Flow ↓" : ""
+
+string _edgeCol1Text = _comboBase != "" ? _comboBase + _contextTag :
+     _gapTag != "" and _fractalTag != "" ? _gapTag + " · " + _fractalTag :
+     _gapTag != "" ? _gapTag : _fractalTag != "" ? _fractalTag : "──"
+string _edgeCol2Text = _microStr
+
+color _edgeBG = _edgeScore >= 4 ? color.new(c_gold,82) : _edgeScore >= 2 ? color.new(c_teal,88) : color.new(c_bg,0)
+color _edgeC  = _edgeScore >= 4 ? color.new(#412402,0) : _edgeScore >= 2 ? color.new(c_teal,0) : color.new(c_sub,0)
+
+// Edge Row 8 action tag
+string _edgeActionTag =
+     (_comboA_L or _comboC_L) ? "▲ BUY ⚡" : (_comboA_S or _comboC_S) ? "▼ SELL ⚡" :
+     (_comboD_L or _comboB_L) ? "▲ BUY ★"  : (_comboD_S or _comboB_S) ? "▼ SELL ★"  :
+     _gapBiasLong and _fractalBull ? "▲ WATCH" : _gapBiasShort and _fractalBear ? "▼ WATCH" :
+     _gapBiasLong  ? "▲ WATCH" : _gapBiasShort ? "▼ WATCH" :
+     _fractalBull and _fractalBear ? "WATCH" : _fractalBull ? "▲ WATCH" : _fractalBear ? "▼ WATCH" :
+     _microPatternScore == 3 ? "▲ NOW ⚡" : _microPatternScore == 2 ? "▲ ENTER ★" :
+     _microPatternScore == 1 ? "WAIT 1b"  :
+     (_microBarCount > 0 and _microBarCount <= 3) ? "WAIT" : "SCAN"
+
+color _edgeActionC =
+     (_comboA_L or _comboC_L or _comboD_L or _comboB_L or _gapBiasLong or (_fractalBull and not _fractalBear) or (_microPatternScore >= 2 and _microIsLong)) ? color.new(c_bull,0) :
+     (_comboA_S or _comboC_S or _comboD_S or _comboB_S or _gapBiasShort or (_fractalBear and not _fractalBull))                                             ? color.new(c_bear,0) :
+     (_microPatternScore == 1 or (_microBarCount > 0 and _microBarCount <= 3))                                                                              ? color.new(c_orange,0) :
+     (_fractalBull and _fractalBear) ? color.new(c_gold,0) : color.new(c_sub,0)
+
+color _edgeActionBG =
+     (_comboA_L or _comboC_L or _comboD_L or _comboB_L or _gapBiasLong or (_fractalBull and not _fractalBear)) ? color.new(c_bull,90) :
+     (_comboA_S or _comboC_S or _comboD_S or _comboB_S or _gapBiasShort or (_fractalBear and not _fractalBull)) ? color.new(c_bear,90) :
+     (_microPatternScore >= 1 or (_microBarCount > 0 and _microBarCount <= 3))                                   ? color.new(c_orange,92) :
+     (_fractalBull and _fractalBear) ? color.new(c_gold,90) : _edgeBG
+
+string _edgeCol2Full = _gapFilled ? "Gap filled — use other signals" : _edgeCol2Text
+
+color _edgeCol1C =
+     (_comboA_L or _comboC_L or _comboD_L or _comboB_L) ? color.new(c_bull, 0) :
+     (_comboA_S or _comboC_S or _comboD_S or _comboB_S) ? color.new(c_bear,0) :
+     _gapBiasLong  ? color.new(c_bull,0) : _gapBiasShort ? color.new(c_bear,0) :
+     _gapFilled    ? color.new(c_teal,0) :
+     (_fractalBull and not _fractalBear) ? color.new(c_bull,0) :
+     (_fractalBear and not _fractalBull) ? color.new(c_bear,0) :
+     (_fractalBull and _fractalBear)     ? color.new(c_gold,0) : color.new(c_sub,0)
+
+// ════════════════════════════════════════════════════════════════════
+//// WATCH+ACT variables (declared outside HUD block)
+// ════════════════════════════════════════════════════════════════════
+bool _setupForming = not longSig and not shortSig and not blkHunt and
+     (cmpBull or cmpDivBull or volVcoBullCross or (iofiNorm > iofiNorm[1] and vcoNorm > vcoNorm[1]) or
+      cmpBear or cmpDivBear or volVcoBearCross or (iofiNorm < iofiNorm[1] and vcoNorm < vcoNorm[1]))
+
+//bool _knnPredBull2   = p2BullP >= p2BearP
+bool _iofiVcoConflict = (iofiBull and vcoBear) or (iofiBear and vcoBull)
+bool _iofiBullish     = iofiBull or vcoBull
+bool _iofiBearish     = iofiBear or vcoBear
+
+var float _lastSweepLowL   = na
+var float _lastSweepHighS  = na
+var int   _lastTapBarL     = 0
+var int   _lastTapBarS     = 0
+var bool  _doubleTapBull   = false
+var bool  _doubleTapBear   = false
+// ── Stage 5: LIQUIDITY VOID AFTER SWEEP ─────────────────────────
+// After sweep completes, next bar gaps away leaving empty space
+// No wicks in the void = no one willing to trade at those prices
+// Predicts: fast continuation with no resistance until next OB/FVG
+bool _voidBull = huntDoneBull and
+     open > (low[1] + atr14 * 0.4) and
+     close > open and volRatio >= 1.5
+
+bool _voidBear = huntDoneBear and
+     open < (high[1] - atr14 * 0.4) and
+     close < open and volRatio >= 1.5
+
+
+var int _lastSweepDoneBullBar = 0
+var int _lastSweepDoneBearBar = 0
+if huntDoneBull
+    _lastSweepDoneBullBar := bar_index
+if huntDoneBear
+    _lastSweepDoneBearBar := bar_index
+
+bool _sweepThenBOSBull = bullBOS and
+     _lastSweepDoneBullBar > 0 and
+     (bar_index - _lastSweepDoneBullBar) <= 8
+
+bool _sweepThenBOSBear = bearBOS and
+     _lastSweepDoneBearBar > 0 and
+     (bar_index - _lastSweepDoneBearBar) <= 8
+
+
+bool _doubleSweepBull = huntDoneBull and
+     _lastSweepDoneBearBar > 0 and
+     (bar_index - _lastSweepDoneBearBar) <= 10
+
+bool _doubleSweepBear = huntDoneBear and
+     _lastSweepDoneBullBar > 0 and
+     (bar_index - _lastSweepDoneBullBar) <= 10
+//════════════════════════════════════════════════════════════════════
+// ── Stage 10: HTF SWEEP ──────────────────────────────────────────
+// Weekly or monthly high/low gets swept
+// These are the highest-conviction sweeps — algos target HTF pools
+// Predicts: multi-bar bounce / drop, larger TP targets valid
+bool _sweepWeeklyLow   = not na(pwL) and low < pwL and
+     close > pwL and isHighVol and dnWickR >= i_wickR
+
+bool _sweepWeeklyHigh  = not na(pwH) and high > pwH and
+     close < pwH and isHighVol and upWickR >= i_wickR
+
+bool _sweepMonthlyLow  = not na(pmL) and low < pmL and
+     close > pmL and isHighVol and dnWickR >= i_wickR
+
+bool _sweepMonthlyHigh = not na(pmH) and high > pmH and
+     close < pmH and isHighVol and upWickR >= i_wickR
+
+bool _htfSweepBull = _sweepWeeklyLow  or _sweepMonthlyLow
+bool _htfSweepBear = _sweepWeeklyHigh or _sweepMonthlyHigh
+string _htfSweepTag = _sweepMonthlyLow or _sweepMonthlyHigh ? "Monthly" :
+                      _sweepWeeklyLow  or _sweepWeeklyHigh  ? "Weekly"  : ""
+
+
+// ── Stage 6: SWEEP INTO ORDER BLOCK ─────────────────────────────
+// Sweep terminates exactly inside a fresh OB
+// Institutions placed this OB as the absorption zone for the sweep
+// Predicts: very strong reversal - OB + sweep = double confirmation
+bool _sweepIntoOBBull = (huntDoneBull or inPostSweepWindowL) and
+     inBullOB and freshBullOB
+
+bool _sweepIntoOBBear = (huntDoneBear or inPostSweepWindowS) and
+     inBearOB and freshBearOB
+
+//── Stage 3a: INSTANT REJECTION ──────────────────────────────────
+// Sweep candle closes back in top 30% of its range immediately
+// Price rejected stops and snapped back within the same candle
+// Predicts: strong reversal already starting, enter next bar
+bool _instantRejectBull = stopRunBull and
+     (close - low) > (high - low) * 0.70 and
+     volRatio >= 2.0
+
+bool _instantRejectBear = stopRunBear and
+     (high - close) > (high - low) * 0.70 and
+     volRatio >= 2.0
+
+// ── Stage 3b: OVEREXTENDED SWEEP ────────────────────────────────
+// Sweep wick is more than 3 ATR long
+// Too many stops hit, institutions absorbing heavily at extreme
+// Predicts: violent snap reversal incoming, strongest version
+bool _sweepOverextL = huntDangerBull and
+     (fullRange * dnWickR) > atr14 * 3.0
+
+bool _sweepOverextS = huntDangerBear and
+     (fullRange * upWickR) > atr14 * 3.0
+
+// ── Stage 4: CLEAN SWEEP CONFIRMATION ───────────────────────────
+// huntDoneBull / huntDoneBear already exists
+// ADD quality grading of the confirmation bar
+bool _cleanSweepBull = huntDoneBull and
+     close > (low[1] + (high[1] - low[1]) * 0.65) and
+     volRatio >= 1.5 and zBull
+
+bool _cleanSweepBear = huntDoneBear and
+     close < (high[1] - (high[1] - low[1]) * 0.65) and
+     volRatio >= 1.5 and zBear
+
+
+//── Stage 2: INDUCEMENT ──────────────────────────────────────────
+// A minor swing (smaller than main pool) gets broken first
+// Retail traders enter thinking it is the real breakout
+// Then price reverses to sweep the real deeper pool
+// Predicts: main pool sweep is 1-2 bars away
+bool _inducementL = not na(pL2) and not na(pL1) and
+     math.abs(pL2 - pL1) < atr14 * 0.5 and
+     low < pL2 and close > pL2 and
+     low > pL1 * 0.998 and
+     not huntDangerBull
+
+bool _inducementS = not na(pH2) and not na(pH1) and
+     math.abs(pH2 - pH1) < atr14 * 0.5 and
+     high > pH2 and close < pH2 and
+     high < pH1 * 1.002 and
+     not huntDangerBear
+
+// ── Stage 7: SWEEP + BOS CONFIRMATION ───────────────────────────
+// Sweep of low followed by Break of Structure above within 8 bars
+// The classic SMC entry sequence: sweep then structure shift
+// Predicts: trend direction changed, sustained move beginning
+
+
+// ── Stage 8: DOUBLE SWEEP ────────────────────────────────────────
+// Price sweeps lows then sweeps highs (or reverse) within 10 bars
+// Maximum liquidity grab on BOTH sides
+// Predicts: explosive directional move, size up entry
+
+
+// ── Stage 9: DOUBLE TAP (same level swept twice) ─────────────────
+// Same stop level gets swept a second time after partial recovery
+// Second sweep hits stops placed by traders from the first sweep
+// Predicts: reversal much stronger than first sweep
+
+
+_doubleTapBull := false
+_doubleTapBear := false
+
+if huntDoneBull
+    if not na(_lastSweepLowL) and
+       math.abs(low[1] - _lastSweepLowL) < atr14 * 0.4 and
+       (bar_index - _lastTapBarL) > 3 and
+       (bar_index - _lastTapBarL) <= 40
+        _doubleTapBull := true
+    _lastSweepLowL := low[1]
+    _lastTapBarL   := bar_index
+
+if huntDoneBear
+    if not na(_lastSweepHighS) and
+       math.abs(high[1] - _lastSweepHighS) < atr14 * 0.4 and
+       (bar_index - _lastTapBarS) > 3 and
+       (bar_index - _lastTapBarS) <= 40
+        _doubleTapBear := true
+    _lastSweepHighS := high[1]
+    _lastTapBarS    := bar_index
+
+// ── Stage 11: SESSION OPEN SWEEP ─────────────────────────────────
+// Sweep occurs in the first 15 bars of the session
+// Sets the direction for the entire session
+// Predicts: session bias locked in, trade only that direction today
+bool _sessOpenSweepBull = sessBars <= 15 and
+     (huntDoneBull or inPostSweepWindowL)
+
+bool _sessOpenSweepBear = sessBars <= 15 and
+     (huntDoneBear or inPostSweepWindowS)
+
+
+// ── Stage 1: COILING AT POOL ─────────────────────────────────────
+// Price compressing with narrow candles while sitting at a stop pool
+// Stops are silently accumulating beneath / above price
+// Predicts: sweep will trigger within 1-5 bars
+bool _coilingAtPoolL = _dwellAbovePL1 >= 5 and
+     volVcoCompress and
+     (high - low) < atr14 * 0.6 and
+     not huntDangerBull and not huntDoneBull and
+     not inPostSweepWindowL
+
+bool _coilingAtPoolS = _dwellBelowPH1 >= 5 and
+     volVcoCompress and
+     (high - low) < atr14 * 0.6 and
+     not huntDangerBear and not huntDoneBear and
+     not inPostSweepWindowS
+
+
+// SWEEP LIFECYCLE MASTER STATE — single integer 0-112
+// Priority: highest conviction types at top
+// ════════════════════════════════════════════════════════════════════
+int _sweepState =
+     // Skip if live signal already showing
+     longSig or shortSig                   ? 0   :
+     // ── Highest conviction ──────────────────
+     _doubleSweepBull                      ? 80  :
+     _doubleSweepBear                      ? 81  :
+     _doubleTapBull                        ? 82  :
+     _doubleTapBear                        ? 83  :
+     _htfSweepBull                         ? 100 :
+     _htfSweepBear                         ? 101 :
+     // ── OB confluence ───────────────────────
+     _sweepIntoOBBull                      ? 60  :
+     _sweepIntoOBBear                      ? 61  :
+     // ── Void (fast continuation) ────────────
+     _voidBull                             ? 50  :
+     _voidBear                             ? 51  :
+     // ── Sweep + BOS (trend change) ───────────
+     _sweepThenBOSBull                     ? 70  :
+     _sweepThenBOSBear                     ? 71  :
+     // ── Instant rejection ───────────────────
+     _instantRejectBull                    ? 31  :
+     _instantRejectBear                    ? 32  :
+     // ── Overextended wick ───────────────────
+     _sweepOverextL                        ? 33  :
+     _sweepOverextS                        ? 34  :
+     // ── Clean sweep confirmed ───────────────
+     _cleanSweepBull                       ? 40  :
+     _cleanSweepBear                       ? 41  :
+     // ── Sweep live ──────────────────────────
+     huntDangerBull                        ? 20  :
+     huntDangerBear                        ? 21  :
+     // ── Post sweep window ───────────────────
+     inPostSweepWindowL                    ? 10  :
+     inPostSweepWindowS                    ? 11  :
+     // ── Session open sweep ──────────────────
+     _sessOpenSweepBull                    ? 110 :
+     _sessOpenSweepBear                    ? 111 :
+     // ── Pre-sweep warnings ──────────────────
+     _inducementL                          ? 2   :
+     _inducementS                          ? 3   :
+     _coilingAtPoolL                       ? 1   :
+     _coilingAtPoolS                       ? -1  :
+     // ── Approaching pool ────────────────────
+     inHuntZone                            ? 5   :
+     huntApproaching                       ? 4   : 0
+
+
+int _p2lbl_hi   = 0, int _p2lbl_good = 0, int _p2lbl_marg = 0, int _p2lbl_loss = 0
+int _p2Sz2 = array.size(p2_lbl)
+if _p2Sz2 > 0
+    for _p2qi2 = 0 to _p2Sz2 - 1
+        float _p2ql2 = array.get(p2_lbl, _p2qi2)
+        if _p2ql2 >= 1.0
+            _p2lbl_hi   += 1
+        else if _p2ql2 >= 0.75
+            _p2lbl_good += 1
+        else if _p2ql2 >= 0.25
+            _p2lbl_marg += 1
+        else if _p2ql2 == 0.0
+            _p2lbl_loss += 1
+
+
+
+int   _p2TotalLbl  = _p2lbl_hi + _p2lbl_good + _p2lbl_marg + _p2lbl_loss
+
+// ════════════════════════════════════════════════════════════════════
+// SWEEP PREDICTION ENGINE
+// Three strings derived purely from _sweepState
+// _swpCol0 = state badge (what is happening)
+// _swpCol1 = next step prediction (what comes next)
+// _swpCol2 = trader action (what to do right now)
+// ════════════════════════════════════════════════════════════════════
+
+
+// ════════════════════════════════════════════════════════════════════
+// CRISP SWEEP STRINGS  (new in v7.8 — replaces verbose Row 10 strings)
+// Col 0: badge  ≤12 chars
+// Col 1: Now → Next  ≤38 chars
+// Col 2: Do  ≤12 chars
+// ════════════════════════════════════════════════════════════════════
+string _swpBadge =
+     _sweepState == 80  ? "2x SWP ↑ ⚡" : _sweepState == 81  ? "2x SWP ↓ ⚡" :
+     _sweepState == 82  ? "2ND TAP ↑ ⚡": _sweepState == 83  ? "2ND TAP ↓ ⚡":
+     _sweepState == 100 ? "WK SWP ↑ ⚡" : _sweepState == 101 ? "WK SWP ↓ ⚡" :
+     _sweepState == 60  ? "SWP+OB ↑"   : _sweepState == 61  ? "SWP+OB ↓"   :
+     _sweepState == 50  ? "VOID ↑"      : _sweepState == 51  ? "VOID ↓"      :
+     _sweepState == 70  ? "SWP+BOS ↑"  : _sweepState == 71  ? "SWP+BOS ↓"  :
+     _sweepState == 31  ? "SNAP ↑ ⚡"   : _sweepState == 32  ? "SNAP ↓ ⚡"   :
+     _sweepState == 33  ? "OVEXT ↓"     : _sweepState == 34  ? "OVEXT ↑"     :
+     _sweepState == 40  ? "SWEPT ↑"     : _sweepState == 41  ? "SWEPT ↓"     :
+     _sweepState == 20  ? "SWEEP ↓"     : _sweepState == 21  ? "SWEEP ↑"     :
+     _sweepState == 10  ? "POST ↓"      : _sweepState == 11  ? "POST ↑"      :
+     _sweepState == 110 ? "OPEN ↑"      : _sweepState == 111 ? "OPEN ↓"      :
+     _sweepState == 2   ? "INDUCE ↑"    : _sweepState == 3   ? "INDUCE ↓"    :
+     _sweepState == 1   ? "COIL ↑"      : _sweepState == -1  ? "COIL ↓"      :
+     _sweepState == 5   ? "AT POOL"     : _sweepState == 4   ? "APPROACH"    : "─"
+
+string _swpNowNext =
+     _sweepState == 80  ? "Both sides swept → explosive ↑" :
+     _sweepState == 81  ? "Both sides swept → explosive ↓" :
+     _sweepState == 82  ? "Same low 2x → stronger rev ↑" :
+     _sweepState == 83  ? "Same high 2x → stronger rev ↓" :
+     _sweepState == 100 ? "Wk/Mo low swept → multi-bar ↑" :
+     _sweepState == 101 ? "Wk/Mo high swept → multi-bar ↓" :
+     _sweepState == 60  ? "OB absorbed sweep → inst buy" :
+     _sweepState == 61  ? "OB absorbed sweep → inst sell" :
+     _sweepState == 50  ? "Gap left below → fast ↑, no resist" :
+     _sweepState == 51  ? "Gap left above → fast ↓, no support" :
+     _sweepState == 70  ? "Trend changed ↑ → sustained move" :
+     _sweepState == 71  ? "Trend changed ↓ → sustained move" :
+     _sweepState == 31  ? "Closed top 30% same bar → rev NOW" :
+     _sweepState == 32  ? "Closed bot 30% same bar → rev NOW" :
+     _sweepState == 33  ? "Wick 3+ATR long → snap ↑ coming" :
+     _sweepState == 34  ? "Wick 3+ATR long → snap ↓ coming" :
+     _sweepState == 40  ? "Done ↑ → wait BOS above" :
+     _sweepState == 41  ? "Done ↓ → wait BOS below" :
+     _sweepState == 20  ? "Longs stopped → wait bar close" :
+     _sweepState == 21  ? "Shorts stopped → wait bar close" :
+     _sweepState == 10  ? "Buy window B" + str.tostring(_postSweepBarsL) + "/" + str.tostring(i_postSweepBars) + " → flow building" :
+     _sweepState == 11  ? "Sell window B" + str.tostring(_postSweepBarsS) + "/" + str.tostring(i_postSweepBars) + " → flow building" :
+     _sweepState == 110 ? "Open sweep ↑ → bull bias all day" :
+     _sweepState == 111 ? "Open sweep ↓ → bear bias all day" :
+     _sweepState == 2   ? "Minor low faked → real sweep 1-2b" :
+     _sweepState == 3   ? "Minor high faked → real sweep 1-2b" :
+     _sweepState == 1   ? "NR at low pool → sweep 1-5b" :
+     _sweepState == -1  ? "NR at high pool → sweep 1-5b" :
+     _sweepState == 5   ? "At cluster → sweep any bar" :
+     _sweepState == 4   ? "Pool " + str.tostring(math.round(_nearestPool * 10) / 10) + "ATR → watch signal" : "─"
+
+string _swpDo =
+     _sweepState == 80  ? "SIZE UP ↑"   : _sweepState == 81  ? "SIZE UP ↓"   :
+     _sweepState == 82  ? "BUY size+"   : _sweepState == 83  ? "SELL size+"  :
+     _sweepState == 100 ? "BUY wide TP" : _sweepState == 101 ? "SELL wide TP":
+     _sweepState == 60  ? "BUY at OB"   : _sweepState == 61  ? "SELL at OB"  :
+     _sweepState == 50  ? "HOLD long"   : _sweepState == 51  ? "HOLD short"  :
+     _sweepState == 70  ? "BUY ride"    : _sweepState == 71  ? "SELL ride"   :
+     _sweepState == 31  ? "BUY now"     : _sweepState == 32  ? "SELL now"    :
+     _sweepState == 33  ? "PREP BUY"    : _sweepState == 34  ? "PREP SELL"   :
+     _sweepState == 40  ? "WAIT BOS"    : _sweepState == 41  ? "WAIT BOS"    :
+     _sweepState == 20  ? "WAIT"        : _sweepState == 21  ? "WAIT"        :
+     _sweepState == 10  ? "WATCH BUY"   : _sweepState == 11  ? "WATCH SELL"  :
+     _sweepState == 110 ? "BUY dips"    : _sweepState == 111 ? "SELL rips"   :
+     _sweepState == 2   ? "WAIT"        : _sweepState == 3   ? "WAIT"        :
+     _sweepState == 1   ? "ALERT"       : _sweepState == -1  ? "ALERT"       :
+     _sweepState == 5   ? "READY"       : _sweepState == 4   ? "PREPARE"     : "─"
+
+
+float _p2QualRatio = _p2TotalLbl >= 10 ? float(_p2lbl_hi + _p2lbl_good + _p2lbl_marg) / math.max(float(_p2TotalLbl), 1.0) : 0.0
+bool  _p2Valid2    = p2Conf >= i_knnMinConf and _p2Match_last >= 3 and _p2QualRatio > 0.30
+
+bool _sweepBiasConflict = (inPostSweepWindowS and trendUp) or (inPostSweepWindowL and trendDown)
+bool _knnFlowConflict   = _p2Valid2 and not _iofiVcoConflict and ((not _knnPredBull2 and (iofiBull or vcoBull)) or (_knnPredBull2 and (iofiBear or vcoBear)))
+
+string _poolType     = eqh?"EQH":eql?"EQL":nearPDH?"PDH":nearPDL?"PDL":nearPWH?"WkH":nearPWL?"WkL":"Pool"
+string _hgStr        = hg5Bull or hg5Bear?"hg5=88%":hg4Bull or hg4Bear?"hg4=68%":hg3Bull or hg3Bear?"hg3=48%":hg2Bull or hg2Bear?"hg2=28%":hg1Bull or hg1Bear?"hg1=14%":""
+string _waPoolDetail = _hgStr != "" ? _poolType+" "+str.tostring(math.round(_nearestPool*10)/10)+"ATR  "+_hgStr : str.tostring(math.round(_nearestPool*10)/10)+"ATR"
+bool _sweepActive = _sweepState != 0
+
+string _waState =
+     longSig and sigHighLong?"ENTER BUY ⚡":longSig and sigStrongLong?"ENTER BUY ★":longSig?"ENTER BUY ▲":
+     shortSig and sigHighShort?"ENTER SELL ⚡":shortSig and sigStrongShort?"ENTER SELL ★":shortSig?"ENTER SELL ▲":
+     blkHunt?"SWEEPING":(_sweepBiasConflict or _knnFlowConflict)?"CONFLICT":
+     inPostSweepWindowL?"BUY ZONE":inPostSweepWindowS?"SELL ZONE":
+     huntDoneBull?"SWEPT ↑":huntDoneBear?"SWEPT ↓":
+     inHuntZone?"NEAR POOL":huntApproaching?"APPROACH":
+     _setupForming?"SETUP ▲":blkSess?"BLOCKED":"SCANNING"
+
+string _waAction =
+     longSig and sigHighLong    ? "All gates ✓ — enter now" :
+     longSig and sigStrongLong  ? "Strong ▲ — enter, check levels" :
+     longSig                    ? "Signal ▲ — smaller size ok" :
+     shortSig and sigHighShort  ? "All gates ✓ — enter now" :
+     shortSig and sigStrongShort? "Strong ▼ — enter, check levels" :
+     shortSig                   ? "Signal ▼ — smaller size ok" :
+     blkHunt                    ? "Sweep — wait reversal bar" :
+     _sweepBiasConflict         ? "Sweep vs trend — skip" :
+     _knnFlowConflict           ? "KNN vs flow — wait" :
+     inPostSweepWindowL and not rrGateLong  ? "BUY zone — no OB yet" :
+     inPostSweepWindowS and not rrGateShort ? "SELL zone — no OB yet" :
+     inPostSweepWindowL         ? "BUY zone — flow building" :
+     inPostSweepWindowS         ? "SELL zone — flow building" :
+     huntDoneBull               ? "Swept ↑ — watch buy" :
+     huntDoneBear               ? "Swept ↓ — watch sell" :
+     inHuntZone                 ? _poolType+" pool — sweep expected" :
+     huntApproaching            ? _poolType+" approaching — prepare" :
+     _setupForming              ? "Early signals — 1-3 bars" :
+     blkSess                    ? "Session blocked — skip" :
+     not(instFlowGateLong or instFlowGateShort) ? "Flow weak — wait" :
+     not(rrGateLong or rrGateShort)             ? "No OB target — wait" : "Scanning..."
+
+
+
+
+// Watch col 2: show RR when signal active (prob% already shown in Signal col 1, not needed here)
+string _waRight =
+     longSig  ? rrStrL :
+     shortSig ? rrStrS :
+     (inPostSweepWindowL or inPostSweepWindowS) ? "B"+(inPostSweepWindowL?str.tostring(_postSweepBarsL):str.tostring(_postSweepBarsS))+"/"+str.tostring(i_postSweepBars) :
+     huntApproaching ? _waPoolDetail : inHuntZone ? _waPoolDetail :
+     (_sweepBiasConflict or _knnFlowConflict) ? "SKIP" : _setupForming ? "1-3b" : ""
+
+color _waBG =
+     longSig  ? color.new(c_bull,72) : shortSig ? color.new(c_bear,72) :
+     (_sweepBiasConflict or _knnFlowConflict) ? color.new(c_orange,85) :
+     blkHunt  ? color.new(c_bear,85) : inHuntZone ? color.new(c_gold,86) :
+     huntApproaching ? color.new(c_orange,92) : _setupForming ? color.new(c_teal,92) :
+     (huntDoneBull or huntDoneBear or inPostSweepWindowL or inPostSweepWindowS) ? color.new(c_teal,86) :
+     color.new(#1A1A1A,0)
+
+color _waC =
+     longSig  ? color.new(#173404,0) : shortSig ? color.new(#FFFFFF,0) :
+     (_sweepBiasConflict or _knnFlowConflict) ? color.new(c_orange,0) :
+     blkHunt  ? color.new(c_bear,0) : inHuntZone ? color.new(#412402,0) :
+     huntApproaching ? color.new(c_orange,0) : _setupForming ? color.new(c_teal,0) :
+     (huntDoneBull or huntDoneBear or inPostSweepWindowL or inPostSweepWindowS) ? color.new(c_teal,0) :
+     color.new(c_sub,0)
+
+
+//═══════════════════════════════════════════════════
+// SWEEP ROW COLORS
+// ════════════════════════════════════════════════════════════════════
+color _swpBG =
+     _sweepState == 80 or _sweepState == 81 ? color.new(c_gold,  72) :
+     _sweepState == 82 or _sweepState == 83 ? color.new(c_gold,  80) :
+     _sweepState == 100 or _sweepState == 101 ? color.new(c_gold, 76) :
+     _sweepState == 60 or _sweepState == 70 ? color.new(c_bull,  80) :
+     _sweepState == 61 or _sweepState == 71 ? color.new(c_bear,  80) :
+     _sweepState == 50                       ? color.new(c_bull,  85) :
+     _sweepState == 51                       ? color.new(c_bear,  85) :
+     _sweepState == 31 or _sweepState == 33  ? color.new(c_bull,  85) :
+     _sweepState == 32 or _sweepState == 34  ? color.new(c_bear,  85) :
+     _sweepState == 40                       ? color.new(c_teal,  88) :
+     _sweepState == 41                       ? color.new(c_teal,  88) :
+     _sweepState == 20 or _sweepState == 21  ? color.new(c_bear,  88) :
+     _sweepState == 10                       ? color.new(c_teal,  88) :
+     _sweepState == 11                       ? color.new(c_teal,  88) :
+     _sweepState == 110 or _sweepState == 111 ? color.new(c_teal, 88) :
+     _sweepState == 1  or _sweepState == -1  ? color.new(c_orange,90) :
+     _sweepState == 2  or _sweepState == 3   ? color.new(c_orange,90) :
+     _sweepState == 5                        ? color.new(c_gold,  92) :
+     _sweepState == 4                        ? color.new(c_orange,94) :
+     color.new(c_bg, 0)
+
+color _swpC =
+     _sweepState == 80 or _sweepState == 81  ? color.new(#412402, 0) :
+     _sweepState == 82 or _sweepState == 83  ? color.new(#412402, 0) :
+     _sweepState == 100 or _sweepState == 101 ? color.new(#412402, 0) :
+     _sweepState == 60 or _sweepState == 50 or _sweepState == 70 ? color.new(c_bull, 0) :
+     _sweepState == 61 or _sweepState == 51 or _sweepState == 71 ? color.new(c_bear, 0) :
+     _sweepState == 31 or _sweepState == 33  ? color.new(c_bull,  0) :
+     _sweepState == 32 or _sweepState == 34  ? color.new(c_bear,  0) :
+     _sweepState == 40 or _sweepState == 10  ? color.new(c_teal,  0) :
+     _sweepState == 41 or _sweepState == 11  ? color.new(c_teal,  0) :
+     _sweepState == 20 or _sweepState == 21  ? color.new(c_bear,  0) :
+     _sweepState == 110 or _sweepState == 111 ? color.new(c_teal, 0) :
+     _sweepState == 1  or _sweepState == -1  ? color.new(c_orange, 0) :
+     _sweepState == 2  or _sweepState == 3   ? color.new(c_orange, 0) :
+     _sweepState == 5                        ? color.new(c_gold,   0) :
+     color.new(c_sub, 0)
+
+// ════════════════════════════════════════════════════════════════════
+// END SECTION A
+// ════════════════════════════════════════════════════════════════════
+
+
+
+// ────────────────────────────────────────────────────────────────────
+// COMPOSITE FLAGS FOR HUD & ALERTS
+// ────────────────────────────────────────────────────────────────────
+// ── Direction helper (unchanged from v7.7) ────────────────────
+bool _ifIsL2 = inPostSweepWindowS or huntDoneBear ? false :
+                     inPostSweepWindowL or huntDoneBull  ? true  :
+                     instFlowScoreLong >= instFlowScoreShort
+
+
+
+// ── Pre-compute named combination booleans ───────────────────────
+// Group A — Absorption / Accumulation
+bool _iA1 = vsaStopVol and (_ifIsL2 ? (_absorbNearSweepL or absorpBull) : (_absorbNearSweepS or absorpBear)) and (_ifIsL2 ? (inBullOB or nearBullOB) : (inBearOB or nearBearOB))  // Absorbing panic at OB
+bool _iA2 = vsaEffortFail and (_ifIsL2 ? (huntDoneBull or inPostSweepWindowL) : (huntDoneBear or inPostSweepWindowS))                                                               // Hidden buying after sweep
+bool _iA3 = (_ifIsL2 ? _absorbNearSweepL : _absorbNearSweepS) and volVcoExpanding                                                                                                  // Absorbing + vol expanding
+bool _iA4 = (_ifIsL2 ? vsaNoSupply : vsaNoDemand) and volVcoCompress                                                                                                               // Withdrawing orders — coiling
+bool _iA5 = (_ifIsL2 ? _zdFlipBull : _zdFlipBear) and (_ifIsL2 ? absorpBull : absorpBear) and not volVcoExpanding                                                                  // Silent buying — delta flipped
+bool _iA6 = vsaTFCount == 3 and vsaStopVol                                                                                                                                          // Absorbing all 3 TFs
+
+// Group B — Momentum shift
+bool _iB1 = (volVcoBullCross or volVcoBearCross) and (cmpBull or cmpBear)                                                                                                          // Vol + momentum both rising
+bool _iB2 = (_ifIsL2 ? vsaBullActive : vsaBearActive) and iofiBull != iofiBear and volVcoExpanding                                                                                 // All 3 flow layers confirm
+bool _iB3 = (_ifIsL2 ? _zdFlipBull : _zdFlipBear) and volVcoExpanding                                                                                                              // Order flow flipped + vol expanding
+bool _iB4 = (_ifIsL2 ? zRollBull : zRollBear) and volVcoExpanding                                                                                                                  // Sustained pressure 3 bars + vol
+bool _iB5 = (_ifIsL2 ? cmpDivBull : cmpDivBear) and (_ifIsL2 ? vsaNoSupply : vsaNoDemand)                                                                                         // Accel + opposing side exhausted
+bool _iB6 = (_ifIsL2 ? iofiDivBull : iofiDivBear) and vsaEffortFail                                                                                                               // IOFI diverging + effort fail
+
+// Group C — Sweep confirmation
+bool _iC1 = (_ifIsL2 ? huntDoneBull : huntDoneBear) and vsaStopVol and (_ifIsL2 ? _zdFlipBull : _zdFlipBear)                                                                      // Absorbed sweep — climax + delta flip
+bool _iC2 = (_ifIsL2 ? huntDoneBull : huntDoneBear) and (volVcoBullCross or volVcoBearCross)                                                                                       // Sweep done — vol cycle turning
+bool _iC3 = (_ifIsL2 ? hg5Bull : hg5Bear) and (_ifIsL2 ? _absorbNearSweepL : _absorbNearSweepS) and (_ifIsL2 ? _iofiConfL : _iofiConfS)                                          // Perfect sweep — all gates met
+bool _iC4 = (huntDangerBull or huntDangerBear) and (_ifIsL2 ? iofiDivBull : iofiDivBear)                                                                                          // Accumulating during live sweep
+
+// Group D — Regime / trend strength
+bool _iD1 = hurstVal > 0.60 and vsaTFCount == 3 and volVcoExpanding                                                                                                               // Trending — all TFs + vol growing
+bool _iD2 = hurstVal < 0.45 and vsaEffortFail and volVcoCompress                                                                                                                  // Ranging — fighting extremes + coiling
+bool _iD3 = (_ifIsL2 ? exhaustUp : exhaustDown) and exhaustScore >= 55 and (_ifIsL2 ? vsaNoDemand : vsaNoSupply) and volVcoCompress                                               // Withdrawing — exhausted side + dying vol
+
+// Group E — Microstructure confirmation
+bool _iE1 = (_ifIsL2 ? p5mPinL or p5mEngulfL : p5mPinS or p5mEngulfS) and vsaStopVol and (_ifIsL2 ? (inBullOB or nearBullOB) : (inBearOB or nearBearOB))                        // Defending OB — 5m pattern + vol
+bool _iE2 = (_ifIsL2 ? huntDoneBull : huntDoneBear) and (_ifIsL2 ? p5mPinL : p5mPinS) and (volVcoBullCross or volVcoBearCross)                                                   // 5m pin after sweep + vol turning
+bool _iE3 = vsaTFCount == 3 and _fractalBull != _fractalBear and (_ifIsL2 ? vsaBullActive : vsaBearActive)                                                                        // All TF vol + all TF OB align
+
+// ────────────────────────────────────────────────────────────────────
+// Trade Bias Color for Market & Flow Rows
+// ────────────────────────────────────────────────────────────────────
+f_biasColor() =>
+    if longSig and not shortSig
+        color.new(c_bull, 0)
+    else if shortSig and not longSig
+        color.new(c_bear, 0)
+    else if trendUp and zBull
+        color.new(c_teal, 0)
+    else if trendDown and zBear
+        color.new(c_orange, 0)
+    else if trendUp
+        color.new(c_teal, 60)
+    else if trendDown
+        color.new(c_orange, 60)
+    else if zBull
+        color.new(c_bull, 60)
+    else if zBear
+        color.new(c_bear, 60)
+    else if wrOverSold
+        color.new(c_bull, 60)
+    else if wrOverBought
+        color.new(c_bear, 60)
+    else
+        color.new(c_sub, 0)
+
+// //Col 0 — urgency tier (shown when no sweep state active)
+string _urgencyTier =
+     longSig  and sigHighLong   ? "NOW ↑ ⚡" :
+     longSig  and sigStrongLong ? "NOW ↑ ★"  :
+     longSig                    ? "ENTER ↑"  :
+     shortSig and sigHighShort  ? "NOW ↓ ⚡"  :
+     shortSig and sigStrongShort? "NOW ↓ ★"   :
+     shortSig                   ? "ENTER ↓"  :
+     inPostSweepWindowL or inPostSweepWindowS ? "ZONE"    :
+     huntDoneBull or huntDoneBear             ? "WATCH"   :
+     _setupForming                            ? "EARLY"   :
+     blkSess                                  ? "BLOCKED" :
+     (_sweepBiasConflict or _knnFlowConflict) ? "CONFLICT": "SCAN"
+
+// Row 9 col 0: sweep badge if sweep active, else urgency word
+string _r9c0 = _sweepActive ? _swpBadge : _urgencyTier
+
+// Row 9 col 1: sweep prediction if sweep active, else action
+string _r9c1 = _sweepActive ? _swpNowNext : _waAction
+
+// Row 9 col 2: sweep action if sweep active, else context (RR or numbers)
+string _r9c2 = _sweepActive ? _swpDo : _waRight
+
+// Row 9 colors: sweep colors take priority, else Watch+Act colors
+color _r9BG = _sweepActive ? _swpBG : _waBG
+color _r9C  = _sweepActive ? _swpC  : _waC
+//     copy pasted above.
+
+
+
+// ── Emotion smileys for HUD ─────────────────────────────────────────
+string _emotionRetail = ""
+string _emotionExh    = ""
+
+// Determine primary retail emotion (priority: panic > fear > FOMO > greed > exhaustion)
+if vsaStopVol
+    _emotionRetail := "😨 "   // Panic
+else if vsaNoSupply or fakeBreakBull or fakeBreakBear
+    _emotionRetail := "😰 "   // Fear
+else if vsaEffortFail or (_runDir == 1 and _e1Up)
+    _emotionRetail := "🤡 "   // FOMO
+else if vsaNoDemand or exhaustUp
+    _emotionRetail := "😈 "   // Greed
+else if exhaustScore >= 30
+    _emotionRetail := "😩 "   // Exhaustion
+
+// For Market row exhaustion emoji
+if exhaustScore >= 30
+    _emotionExh := "😩 "
+
+
+//// ────────────────────────────────────────────────────────────────────
+// COMPOSITE ALERTS (Single Buy / Single Sell)
+// ────────────────────────────────────────────────────────────────────
+bool buyAlert = false
+bool sellAlert = false
+
+buyAlert :=
+     // Top tier
+     ( _iC3 and _ifIsL2 ) or
+     ( _sweepState == 60 ) or
+     ( _sweepState == 100 ) or
+     // High probability    
+     ( longSig and signalProbLong >= 70 ) or
+     ( _comboA_L or _comboC_L ) or
+     // Early / moderate
+     ( _microPatternScore >= 2 and _microIsLong ) or
+     ( _sweepState == 70 )
+
+sellAlert :=
+     ( _iC3 and not _ifIsL2 ) or
+     ( _sweepState == 61 ) or
+     ( _sweepState == 101 ) or
+     ( shortSig and signalProbShort >= 70 ) or
+     ( _comboA_S or _comboC_S ) or
+     ( _microPatternScore >= 2 and not _microIsLong ) or      // optional; you may split by direction
+     ( _sweepState == 71 )
+
+// --- Alerts for composite signals ---
+alertcondition(buyAlert,  title="SSP Buy Alert",  message="SSP: Buy signal detected")
+alertcondition(sellAlert, title="SSP Sell Alert", message="SSP: Sell signal detected")
+// ════════════════════════════════════════════════════════════════════
+// HUD — 10 ROWS (0-9)
+// ════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════
+// HUD — 10 ROWS (was 11 — Row 10 Sweep merged into Row 9)
+// ════════════════════════════════════════════════════════════════════
+var table hud = na
+if i_showHUD and barstate.islast
+    if not na(hud)
+        table.delete(hud)
+    // ── 10 rows (0-9) — was 11 rows in v9.01 ────────────────────────
+    hud := table.new(hudPos, 3, 10, bgcolor=color.new(c_bg,5), border_color=color.new(#2A2A2A,0), border_width=1, frame_color=color.new(#3A3A3A,0), frame_width=1)
+    color _bgH = color.new(#1A1A1A,0)
+    color _bgN = color.new(c_bg,0)
+    string _sz = hudSz
+    string _al = text.align_left
+    string _ar = text.align_right
+    string _ac = text.align_center
+
+
+
+    // ── Col 1: what institutions are DOING ───────────────────────────
+    string _instDoing =
+         blkSess                     ? "Blocked — session closed" :
+         (huntDangerBull or huntDangerBear) and _iC4 ? "Accumulating silently — live sweep" :
+         (huntDangerBull or huntDangerBear)           ? "Triggering stops — sweep live" :
+         _iA6                        ? "Absorbing — all 3 TFs simultaneously" :
+         _iA1                        ? "Absorbing panic — defending OB" :
+         _iA2                        ? "Hidden buying — effort≠result post-sweep" :
+         _iA3                        ? "Absorbing + vol expanding" :
+         _iA4 and _ifIsL2            ? "Withdrawing sells — coiling ↑" :
+         _iA4 and not _ifIsL2        ? "Withdrawing buys — coiling ↓" :
+         _iA5 and _ifIsL2            ? "Buying silently — delta flipped ↑" :
+         _iA5 and not _ifIsL2        ? "Selling silently — delta flipped ↓" :
+         _iC1 and _ifIsL2            ? "Absorbed sweep ↑ — climax+delta confirm" :
+         _iC1 and not _ifIsL2        ? "Absorbed sweep ↓ — climax+delta confirm" :
+         _iC2 and _ifIsL2            ? "Sweep done ↑ — vol cycle turning" :
+         _iC2 and not _ifIsL2        ? "Sweep done ↓ — vol cycle turning" :
+         _iC3 and _ifIsL2            ? "Perfect bull sweep — hg5+absorb+flow ✓" :
+         _iC3 and not _ifIsL2        ? "Perfect bear sweep — hg5+absorb+flow ✓" :
+         _iB2 and _ifIsL2            ? "Pushing ↑ — VSA+flow+VolVCO agree" :
+         _iB2 and not _ifIsL2        ? "Pushing ↓ — VSA+flow+VolVCO agree" :
+         _iB1 and _ifIsL2            ? "Accelerating ↑ — vol+momentum turning" :
+         _iB1 and not _ifIsL2        ? "Accelerating ↓ — vol+momentum turning" :
+         _iB4 and _ifIsL2            ? "Sustained buying 3 bars + vol rising" :
+         _iB4 and not _ifIsL2        ? "Sustained selling 3 bars + vol rising" :
+         _iB3 and _ifIsL2            ? "Flow flipped ↑ + vol expanding" :
+         _iB3 and not _ifIsL2        ? "Flow flipped ↓ + vol expanding" :
+         _iB5 and _ifIsL2            ? "Accel ↑ — bears exhausted" :
+         _iB5 and not _ifIsL2        ? "Accel ↓ — bulls exhausted" :
+         _iB6 and _ifIsL2            ? "Fighting retail sell — IOFI diverging ↑" :
+         _iB6 and not _ifIsL2        ? "Fighting retail buy — IOFI diverging ↓" :
+         _iE3 and _ifIsL2            ? "All TF vol + all TF OBs align ↑" :
+         _iE3 and not _ifIsL2        ? "All TF vol + all TF OBs align ↓" :
+         _iE1 and _ifIsL2            ? "Defending bull OB — 5m reject+StopVol" :
+         _iE1 and not _ifIsL2        ? "Defending bear OB — 5m reject+StopVol" :
+         _iE2 and _ifIsL2            ? "5m pin post-sweep + vol turning ↑" :
+         _iE2 and not _ifIsL2        ? "5m pin post-sweep + vol turning ↓" :
+         _iD1 and _ifIsL2            ? "Trending ↑ — all TFs+vol growing" :
+         _iD1 and not _ifIsL2        ? "Trending ↓ — all TFs+vol growing" :
+         _iD2 and _ifIsL2            ? "Ranging — fighting lows, vol coiling" :
+         _iD2 and not _ifIsL2        ? "Ranging — fighting highs, vol coiling" :
+         _iD3 and _ifIsL2            ? "Withdrawing — bulls spent, vol dying" :
+         _iD3 and not _ifIsL2        ? "Withdrawing — bears spent, vol dying" :
+         instFlowScoreLong > 0 or instFlowScoreShort > 0 ? "Partial — no direction confirmed" :
+         "No inst activity"
+
+    // ── Col 2: prediction / action ───────────────────────────────────
+    string _instAction =
+         blkSess                     ? "─  Session closed" :
+         (huntDangerBull or huntDangerBear) and _iC4 ? "▲ PREPARE  Enter on close" :
+         (huntDangerBull or huntDangerBear)           ? "⏸ WAIT  Sweep completing" :
+         _iA6                        ? (_ifIsL2 ? "▲ BUY  3TF conviction — size up" : "▼ SELL  3TF conviction — size up") :
+         _iA1                        ? (_ifIsL2 ? "▲ BUY  Inst defending OB" : "▼ SELL  Inst defending OB") :
+         _iA2                        ? (_ifIsL2 ? "▲ BUY  Hidden buying confirmed" : "▼ SELL  Hidden selling confirmed") :
+         _iA3                        ? (_ifIsL2 ? "▲ BUY  Energy behind move" : "▼ SELL  Energy behind move") :
+         _iA4                        ? "◉ WATCH  Wait for Z-flip" :
+         _iA5                        ? "◉ WATCH  Wait for vol confirm" :
+         _iC1                        ? (_ifIsL2 ? "▲ BUY  Sweep absorbed — enter" : "▼ SELL  Sweep absorbed — enter") :
+         _iC2                        ? (_ifIsL2 ? "▲ BUY  Real reversal" : "▼ SELL  Real reversal") :
+         _iC3                        ? (_ifIsL2 ? "▲ BUY  Perfect setup" : "▼ SELL  Perfect setup") :
+         _iB2                        ? (_ifIsL2 ? "▲ BUY  VSA+IOFI+VolVCO agree" : "▼ SELL  VSA+IOFI+VolVCO agree") :
+         _iB1                        ? "◉ WATCH  2-4b early" :
+         _iB4                        ? "◉ WATCH  Ride — don't fade" :
+         _iB3                        ? "◉ WATCH  Wait OB touch" :
+         _iB5                        ? "◉ WATCH  Early reversal 3-4b" :
+         _iB6                        ? "◉ WATCH  Wait Z-flip" :
+         _iE3                        ? (_ifIsL2 ? "▲ BUY  Highest conviction" : "▼ SELL  Highest conviction") :
+         _iE1                        ? (_ifIsL2 ? "▲ BUY  5m+OB confirmed" : "▼ SELL  5m+OB confirmed") :
+         _iE2                        ? (_ifIsL2 ? "▲ BUY  Clean post-sweep" : "▼ SELL  Clean post-sweep") :
+         _iD1                        ? (_ifIsL2 ? "▲ BUY  Ride trend" : "▼ SELL  Ride trend") :
+         _iD2                        ? "⊘ SKIP MID  Fade edges only" :
+         _iD3                        ? "⊘ SKIP  Wait for reset" :
+         instFlowScoreLong > 0 or instFlowScoreShort > 0 ? "◉ WATCH  Building" :
+         "─  No action"
+
+    // ── Col 1 + Col 2 colors ─────────────────────────────────────────
+    bool _instBull = _iA1 or _iA2 or _iA3 or _iA6 or _iC1 or _iC2 or _iC3 or _iE1 or _iE2 or _iE3 or _iD1 or (_iB2 and _ifIsL2)
+    bool _instBear = not _ifIsL2 and (_iA1 or _iA2 or _iA3 or _iA6 or _iC1 or _iC2 or _iC3 or _iE1 or _iE2 or _iE3 or _iD1 or _iB2)
+    bool _instWarn = _iD2 or _iD3
+    bool _instWatch = _iA4 or _iA5 or _iB1 or _iB3 or _iB4 or _iB5 or _iB6 or _iC4
+
+    color _instC =
+         blkSess                     ? color.new(c_sub,0)    :
+         (huntDangerBull or huntDangerBear) and _iC4 ? color.new(c_teal,0) :
+         (huntDangerBull or huntDangerBear)           ? color.new(c_bear,0) :
+         (_ifIsL2 and (_instBull or _iE2 or _iE3))   ? color.new(c_bull,0) :
+         (not _ifIsL2 and (_instBear or _iE2 or _iE3))? color.new(c_bear,0):
+         _instWarn                   ? color.new(c_orange,0) :
+         _instWatch                  ? color.new(c_teal,0)   :
+         instFlowScoreLong > 0 or instFlowScoreShort > 0 ? color.new(c_orange,0) :
+         color.new(c_sub,0)
+    //color _bgN = color.new(c_bg,0)
+    color _instBG =
+         blkSess                     ? _bgN                  :
+         (huntDangerBull or huntDangerBear) and _iC4 ? color.new(c_teal,92) :
+         (huntDangerBull or huntDangerBear)           ? color.new(c_bear,88) :
+         (_ifIsL2  and (_iA1 or _iA2 or _iA3 or _iA6 or _iC1 or _iC2 or _iC3 or _iE1 or _iE2 or _iE3 or _iD1 or _iB2)) ? color.new(c_bull,90) :
+         (not _ifIsL2 and (_iA1 or _iA2 or _iA3 or _iA6 or _iC1 or _iC2 or _iC3 or _iE1 or _iE2 or _iE3 or _iD1 or _iB2)) ? color.new(c_bear,90) :
+         _instWarn                   ? color.new(c_orange,90):
+         _instWatch                  ? color.new(c_teal,92)  :
+         _bgN
+
+    bool _knnPredBull2hud = _knnPredBull2
+    float _knnPredPct2     = math.max(p2BullP, p2BearP)
+    color _knnBG2 = not i_knnOn or not _p2Valid2 ? _bgN :
+                         _knnPredBull2hud and p2Conf >= 0.50 ? color.new(c_bull,90) :
+                         not _knnPredBull2hud and p2Conf >= 0.50 ? color.new(c_bear,90) : _bgN
+    color _knnC2  = not i_knnOn or not _p2Valid2 ? color.new(c_sub,20) :
+                         p2AvgLbl >= 0.70 ? color.new(c_bull,0) : p2AvgLbl >= 0.50 ? color.new(c_teal,0) :
+                         p2AvgLbl >= 0.35 ? color.new(c_orange,0) : color.new(c_bear,0)
+    string _arrKNN    = _knnPredBull2hud ? "▲" : "▼"
+    string _knnWinNote = (_p2Valid2 and not _knnPredBull2hud and inPostSweepWindowL) ? " ⚠BUY" :
+                          (_p2Valid2 and _knnPredBull2hud and inPostSweepWindowS)    ? " ⚠SELL" : ""
+    string _knnQualWord = p2AvgLbl>=0.70?"[Hi-RR]":p2AvgLbl>=0.50?"[Good]":p2AvgLbl>=0.35?"[Mrgn]":"[Poor]"
+    string _knnConfWord = p2Conf>=0.65?"Hi":p2Conf>=0.40?"Med":"Lo"
+    string _knnPredStr = not i_knnOn    ? "Off" :
+         blkSess                        ? "Blocked" :
+         _p2TotalLbl < 10               ? "Warming ("+str.tostring(10-_p2TotalLbl)+" bars)" :
+         not (_p2QualRatio > 0.30)      ? "Low Q ["+str.tostring(math.round(_p2QualRatio*100))+"%]" :
+         not _p2Valid2                  ? "No edge" :
+         (_knnPredBull2hud?"LONG":"SHORT")+" "+str.tostring(math.round(_knnPredPct2))+"% "+_knnConfWord+" "+ _knnQualWord + _knnWinNote
+
+    string _exhStr  = exhaustScore > 30 ? " " + _exhEnhTag : ""
+    int    _vsaDisp = vsaInt1m != 0 ? vsaInt1m : vsaInt_5m != 0 ? vsaInt_5m : vsaInt_15m
+    color  _vsaC2   = vsaBullActive and vsaTFCount>=2?color.new(c_bull,0):vsaBullActive?color.new(c_teal,0):vsaBearActive and vsaTFCount>=2?color.new(c_bear,0):vsaBearActive?color.new(c_orange,0):color.new(c_sub,0)
+    string _vsaPips = vsaPatternName != "─" ? vsaPatternName + (vsaTFCount > 1 ? " [" + str.tostring(vsaTFCount) + "TF]" : "") : "─"
+    color  _retC2   = fakeBreakBull or fakeBreakBear ? color.new(c_bear,0) : _vsaC2
+
+    string _arrZ    = zBull?"▲":zBear?"▼":"─"
+    string _arrTrnd = trendUp?"▲":trendDown?"▼":"─"
+    string _arr15m  = htf15Up?"▲":htf15Dn?"▼":"─"
+    string _arrIofi = iofiNorm>iofiNorm[1]?"↑":iofiNorm<iofiNorm[1]?"↓":"→"
+    string _arrVco  = vcoNorm>vcoNorm[1]?"↑":vcoNorm<vcoNorm[1]?"↓":"→"
+    string _arrVc   = volVcoExpanding?"↑":volVcoCompress?"↓":"→"
+    string _vcBadge = volVcoExpanding?"Exp":volVcoCompress?"Cmp":"Neu"
+    string _cmpTag  = cmpBull?"C↑↑":cmpBear?"C↓↓":cmpNorm>0.1?"C↑":cmpNorm<-0.1?"C↓":"C─"
+    bool   _hurstFalling = hurstVal < hurstVal[1] and hurstVal < hurstVal[2]
+    bool   _hurstRising  = hurstVal > hurstVal[1] and hurstVal > hurstVal[2]
+    string _arrHurs  = _hurstRising?"↑":_hurstFalling?"↓":"→"
+    string _regBadge = hurstVal>0.60?" [Trnd]":hurstVal<0.45?" [Rng]":" [Chop]"
+    string _sessQ    = "SQ:" + str.tostring(math.round(sessQuality*100)) + "%"
+//
+    string _ctxImpl =
+         wrOverBought ? "Overbought — due for pullback" :
+         wrOverSold   ? "Oversold — bounce likely" :
+         isInstVol and trendUp and htf15Up ? "BigVol ↑ — follow" :
+         isInstVol and trendDown and htf15Dn ? "BigVol ↓ — follow" :
+         isInstVol ? "BigVol — wait dir" :
+         hurstVal>0.60 and _hurstRising and zBull ? "Strong ↑ — buy" :
+         hurstVal>0.60 and _hurstRising and zBear ? "Strong ↓ — sell" :
+         hurstVal>0.60 and zBull ? "Trend ↑ — ride" : hurstVal>0.60 and zBear ? "Trend ↓ — ride" :
+         hurstVal>0.60 ? "Trend — pullback" :
+         hurstVal<0.45 and zBull ? "Range ↑ — fade hi" : hurstVal<0.45 and zBear ? "Range ↓ — fade lo" :
+         hurstVal<0.45 ? "Range — extremes" : _hurstFalling ? "Chop — calming" :
+         isHighVol ? "HighVol — confirm" : isLowVol ? "Thin — widen SL" : "No edge"
+    string _exhCtx  = exhaustScore>30 ? "  " + _exhEnhTag : ""
+    string _ctxNums = "WR:" + _arrWR + str.tostring(math.round(math.abs(wr14))) +
+                  "  V:" + str.tostring(math.round(volRatio * 10) / 10) + "x" +
+                  "  H:" + str.tostring(math.round(hurstVal * 100) / 100) + _regBadge + _arrHurs + _exhCtx
+    color  _ctxC    = zBull?color.new(c_bull,0):zBear?color.new(c_bear,0):isInstVol?color.new(c_gold,0):hurstVal<0.45?color.new(c_teal,0):hurstVal>0.60?color.new(c_bull,0):color.new(c_sub,0)
+
+    string _iofiVcoInterp =
+         blkHunt and huntDangerBear and _iofiBullish ? "Bull vs ↓sweep" :
+         blkHunt and huntDangerBull and _iofiBearish ? "Bear vs ↑sweep" :
+         // ── [HUD-2] removed: blkHunt ? "Sweep — live" ──────────────
+         inPostSweepWindowL and _iofiBearish         ? "Bear in BUY ⚠" :
+         inPostSweepWindowS and _iofiBullish         ? "Bull in SELL ⚠" :
+         (iofiBull and vcoBull and cmpBull and volVcoExpanding) ? "All 4 ↑ — max strength" :
+         (iofiBear and vcoBear and cmpBear and not volVcoExpanding) ? "All 4 ↓ — max strength" :
+         (iofiBull and vcoBull and cmpBull) ? "I+V+C ↑ ✓" : (iofiBear and vcoBear and cmpBear) ? "I+V+C ↓ ✓" :
+         volVcoBullCross and cmpBull ? "VolExp↑ + CMP — breakout" : volVcoBearCross and cmpBear ? "VolExp↓ + CMP — breakout" :
+         volVcoCompress and cmpBull  ? "Coiling↑ — squeeze forming" : volVcoCompress and cmpBear  ? "Coiling↓ — squeeze forming" :
+         (iofiBull and vcoBull) ? "I+V Bull ✓" : (iofiBear and vcoBear) ? "I+V Bear ✓" :
+         cmpBull and not iofiBull ? "CMP↑ early ~2-4b" : cmpBear and not iofiBear ? "CMP↓ early ~2-4b" :
+         cmpDivBull ? "Div↑ reversal" : cmpDivBear ? "Div↓ reversal" :
+         (iofiBull and vcoBear) ? "I↑/V↓ trust V" : (iofiBear and vcoBull) ? "I↓/V↑ trust V" :
+         (iofiBull or vcoBull) ? "Partial ↑ — watch" : (iofiBear or vcoBear) ? "Partial ↓ — watch" : "Flat"
+    color _iofiVcoC = blkHunt and not (_iofiBullish != _iofiBearish) ? color.new(c_sub,0) :
+         (inPostSweepWindowL and _iofiBearish) or (inPostSweepWindowS and _iofiBullish)?color.new(c_orange,0):
+         (iofiBull and vcoBull and cmpBull and volVcoExpanding)?color.new(c_bull,0):
+         (iofiBear and vcoBear and cmpBear)?color.new(c_bear,0):
+         (cmpBull or volVcoBullCross or cmpDivBull)?color.new(c_teal,0):
+         (cmpBear or volVcoBearCross or cmpDivBear)?color.new(c_orange,0):
+         _iofiVcoConflict?color.new(c_orange,0):color.new(c_sub,0)
+    string _iofivcoNums = "Z:" + _arrZ + str.tostring(math.round(math.abs(zEff) * 10) / 10, "#.#") +
+                      " I:" + str.tostring(math.round(iofiNorm * 100)) + _arrIofi +
+                      " V:" + str.tostring(math.round(vcoNorm * 100)) + _arrVco +
+                      " VC:" + _vcBadge + _arrVc + " " + _cmpTag
+    // Signal row background built inline in Row 1 block (_sigBG2)
+    color _sigC  = longSig?color.new(#173404,0):shortSig?color.new(#FFFFFF,0):blkHunt?color.new(c_bear,0):inHuntZone?color.new(#412402,0):color.new(c_sub,0)
+    color _tBG   = color.new(c_bg,0)
+    float _dispSL = longSig ? dynSLLong : shortSig ? dynSLShort : na
+    float _dispTP = longSig and rrGateLong ? _tgtLong : shortSig and rrGateShort ? _tgtShort : na
+
+     // ── Retail row col 1 — plain English retail behaviour narrative ──────
+  // ════════════════════════════════════════════════════════════════
+    // [HUD-3] RETAIL — _retImpl
+    // Removed: 5 blkHunt lines that showed "Sweep —" prefixed text
+    //          (Row 1 Signal already shows sweep state clearly)
+    // Changed: during sweep, VSA pattern shown directly without prefix
+    // Kept: fakeBreakBull/Bear lines (unique to Retail row)
+    // Now always shows VSA narrative regardless of hunt state
+    // ════════════════════════════════════════════════════════════════
+    string _retImpl =
+         // ── [HUD-3] blkHunt sweep-state lines removed ────────────
+         // old: blkHunt and _vsaDisp==2 ? "Sweep ↓ — panic sell..." etc
+         // Replaced: VSA pattern shown directly, hunt context is Row 1's job
+         fakeBreakBull              ? "FakeBreak ↑ — longs trapped" :
+         fakeBreakBear              ? "FakeBreak ↓ — shorts trapped" :
+         _vsaDisp ==  2 and (huntDoneBull or inPostSweepWindowL) ? "SC panic — inst absorbing, BUY" :
+         _vsaDisp ==  2 and (huntDoneBear or inPostSweepWindowS) ? "SC panic in SELL zone — caution" :
+         _vsaDisp ==  2 and blkHunt ? "SC panic — inst absorbing dip" :
+         _vsaDisp ==  2             ? "Panic sell — wait sweep first" :
+         _vsaDisp == -2 and blkHunt ? "Effort≠result — hidden force" :
+         _vsaDisp ==  1 and blkHunt ? "NS — bears fading, rev ↑ likely" :
+         _vsaDisp == -1 and blkHunt ? "ND — bulls fading, rev ↓ likely" :
+         exhaustUp   and exhaustScore >= 55 ? "Bulls spent — dist near"+_exhStr :
+         exhaustDown and exhaustScore >= 55 ? "Bears spent — accum near"+_exhStr :
+         _vsaDisp ==  1 and trendDown       ? "NS in downtrend — wait BOS" :
+         _vsaDisp ==  1 and inPostSweepWindowS ? "NS in SELL zone — may stall" :
+         _vsaDisp ==  1             ? "No supply — up move likely" :
+         _vsaDisp == -1 and trendUp        ? "ND in uptrend — wait OB" :
+         _vsaDisp == -1 and inPostSweepWindowL ? "ND in BUY zone — wait" :
+         _vsaDisp == -1             ? "No demand — drop likely" :
+         _vsaDisp == -2             ? "Effort≠result — hidden force" :
+         huntApproaching            ? _poolType+" near — sweep soon" :
+         inHuntZone                 ? _poolType+" — sweep any bar" :
+         vsaBullActive and inPostSweepWindowS ? "Bull vol in SELL zone — careful" :
+         vsaBearActive and inPostSweepWindowL ? "Bear vol in BUY zone — careful" :
+         vsaBullActive              ? "Vol behind bulls — "+str.tostring(vsaTFCount)+"TF" :
+         vsaBearActive              ? "Vol behind bears — "+str.tostring(vsaTFCount)+"TF" :
+         exhaustScore > 30          ? "Momentum fading"+_exhStr :
+         "Clean — no trap or extreme"
+    color _retImplC =
+         fakeBreakBull or fakeBreakBear                                       ? color.new(c_bear,0)   :
+         (_vsaDisp == 2 and (huntDoneBull or inPostSweepWindowL))             ? color.new(c_bull,0)   :
+         (_vsaDisp == 2 and (huntDoneBear or inPostSweepWindowS))             ? color.new(c_bear,0)   :
+         _vsaDisp ==  2                                                       ? color.new(c_orange,0) :
+         (exhaustUp and exhaustScore>=55) or (exhaustDown and exhaustScore>=55)? color.new(c_orange,0) :
+         _vsaDisp ==  1                                                       ? color.new(c_bull,0)   :
+         _vsaDisp == -1                                                       ? color.new(c_bear,0)   :
+         _vsaDisp == -2                                                       ? color.new(c_gold,0)   :
+         huntApproaching or inHuntZone                                        ? color.new(c_gold,0)   :
+         (vsaBullActive and inPostSweepWindowS) or (vsaBearActive and inPostSweepWindowL) ? color.new(c_orange,0) :
+         vsaBullActive                                                        ? color.new(c_bull,0)   :
+         vsaBearActive                                                        ? color.new(c_bear,0)   :
+         exhaustScore > 30                                                    ? color.new(c_orange,0) :
+         color.new(c_sub,0)
+    string _retNums2 = "1m:"+str.tostring(vsaInt1m)+"  5m:"+str.tostring(vsaInt_5m)+"  15m:"+str.tostring(vsaInt_15m)+(exhaustScore>30?"  "+_exhEnhTag:"")
+    // Signal col 2 built inline in Row 1 block below
+
+    // ── Row 0 — Header ───────────────────────────────────────────────
+    table.cell(hud, 0, 0, "SSP v14.8", text_color=color.new(c_gold,0), bgcolor=_bgH, text_size=_sz, text_halign=_al)
+    table.cell(hud, 1, 0, syminfo.ticker, text_color=color.new(c_sub,0), bgcolor=_bgH, text_size=_sz, text_halign=_al)
+    table.cell(hud, 2, 0, "15m:"+_arr15m, text_color=(sessQuality>=0.85?color.new(c_bull,0):sessQuality>=0.60?color.new(c_teal,0):sessQuality>=0.40?color.new(c_orange,0):color.new(c_sub,0)), bgcolor=_bgH, text_size=_sz, text_halign=_ar)
+
+    // ── Row 1 — Signal (all 4 hunt phases + signal states) ───────────
+    // Col 0: state label  |  Col 1: what is happening  |  Col 2: compact numbers
+    // _poolFlag, _poolDensity, _rnTag, _dwellTag declared at global scope above
+
+    // -- col 0 state label --
+    string _sig0 =
+         longSig  and sigHighLong    ? "▲ BUY ⚡"  :
+         longSig  and sigStrongLong  ? "▲ BUY ★"   :
+         longSig                     ? "▲ BUY"      :
+         shortSig and sigHighShort   ? "▼ SELL ⚡"  :
+         shortSig and sigStrongShort ? "▼ SELL ★"   :
+         shortSig                    ? "▼ SELL"     :
+         huntDangerBull              ? "SWEEP ↓"    :
+         huntDangerBear              ? "SWEEP ↑"    :
+         inPostSweepWindowL          ? "SWEPT ↓"    :
+         inPostSweepWindowS          ? "SWEPT ↑"    :
+         inHuntZone                  ? "⚠ POOL"     :
+         huntApproaching             ? "▶ POOL"     :
+         fakeBreakBull               ? "FAKE ↑"     :
+         fakeBreakBear               ? "FAKE ↓"     : "Signal"
+
+    // -- col 1 description --
+    // [HUD-4] _sig1 — huntApproaching: removed ATR distance (in Levels)
+    // Old: huntApproaching? _poolType+" "+str.tostring(math.round(_nearestPool*10)/10)+"ATR away  "+_hgStr
+    // New: huntApproaching? _poolType+" pool — "+_hgStr
+    string _sig1 =
+         longSig  ? (sigHighLong ?"BUY ⚡ ":sigStrongLong ?"BUY ★ ":"BUY ▲ ")+str.tostring(probLongDisp)+"%"  :
+         shortSig ? (sigHighShort?"SELL ⚡ ":sigStrongShort?"SELL ★ ":"SELL ▲ ")+str.tostring(probShortDisp)+"%" :
+         huntDangerBull ? "Liq.grab ↓ — retail longs stopped out" :
+         huntDangerBear ? "Liq.grab ↑ — retail shorts stopped out" :
+         inPostSweepWindowL ? "Sweep done ↓  B"+str.tostring(_postSweepBarsL)+"/"+str.tostring(i_postSweepBars)+" — watch BUY" :
+         inPostSweepWindowS ? "Sweep done ↑  B"+str.tostring(_postSweepBarsS)+"/"+str.tostring(i_postSweepBars)+" — watch SELL" :
+         inHuntZone     ? _poolType+" — sweep imminent  "+_hgStr :
+         // ── [HUD-4] ATR distance removed from huntApproaching ─────
+         huntApproaching? _poolType+" pool — "+_hgStr :
+         fakeBreakBull  ? "FakeBreak ↑ — retail longs trapped" :
+         fakeBreakBear  ? "FakeBreak ↓ — retail shorts trapped" :
+         not(instFlowGateLong or instFlowGateShort) ? "Flow weak (need 45+)"   :
+         not(rrGateLong or rrGateShort)             ? "No OB target ≥1R"       :
+         not longRaw and not shortRaw               ? "No structure+flow align" : "Prob threshold not met"
+
+    // -- col 2 compact numbers --
+    string _sigCol2 =
+         longSig  ? "RR:"+rrStrL+(_vsaPips!="─"?"  "+_vsaPips:"") :
+         shortSig ? "RR:"+rrStrS+(_vsaPips!="─"?"  "+_vsaPips:"") :
+         huntDangerBull or huntDangerBear ? _poolFlag :
+         inPostSweepWindowL or inPostSweepWindowS ? _hgStr+(_vsaPips!="─"?"  "+_vsaPips:"") :
+         inHuntZone or huntApproaching    ? _poolFlag :
+         _vsaPips != "─" ? _vsaPips : blkWhy
+
+    // -- col 0/1/2 colors --
+    bool   _isHuntPhase = huntDangerBull or huntDangerBear or inHuntZone or huntApproaching
+    bool   _isPostSweep = inPostSweepWindowL or inPostSweepWindowS
+    color  _sig0C =
+         longSig                     ? _sigC :
+         shortSig                    ? _sigC :
+         huntDangerBull or huntDangerBear ? color.new(c_bear,0)   :
+         _isPostSweep                ? color.new(c_teal,0)   :
+         inHuntZone                  ? color.new(c_gold,0)   :
+         huntApproaching             ? color.new(c_orange,0) :
+         fakeBreakBull or fakeBreakBear ? color.new(c_bear,0) : color.new(c_sub,0)
+    color  _sig1C = _sig0C
+    color  _sigCol2C =
+         longSig  ? (_comboA_L or _comboC_L ? color.new(c_bull,0) : _sigC) :
+         shortSig ? (_comboA_S or _comboC_S ? color.new(c_bear,0) : _sigC) :
+         _isHuntPhase or _isPostSweep ? (_poolScoreMax?color.new(c_bear,0):_poolScoreHi?color.new(c_orange,0):color.new(c_sub,0)) :
+         _vsaPips != "─" ? _vsaC2 : _sigC
+    color _sigBG2 =
+         longSig  and sigHighLong  ? color.new(c_bull,72) :
+         longSig                   ? color.new(c_bull,82) :
+         shortSig and sigHighShort ? color.new(c_bear,72) :
+         shortSig                  ? color.new(c_bear,82) :
+         huntDangerBull or huntDangerBear ? color.new(c_bear,85) :
+         _isPostSweep              ? color.new(c_teal,88) :
+         inHuntZone                ? color.new(c_gold,88) :
+         huntApproaching           ? color.new(c_orange,92) : color.new(c_bg,0)
+
+    // ── Row 2 — Levels (repurposed during hunt phases) ────────────────
+    // Signal/post-sweep: normal E/SL/TP display
+    // Hunt phases:       stop price being targeted + pool stack detail
+
+    // Stop level being hit — exact price retail stops are at
+    string _stopLvlL = not na(pL1) ? f_px(pL1) : "─"
+    string _stopLvlS = not na(pH1) ? f_px(pH1) : "─"
+
+    // Stack detail — which level types are contributing to this pool
+    string _stackTypes =
+         (eql ? "EQL" : eqh ? "EQH" : "") +
+         (_obNearPoolL or _obNearPoolS ? "+OB" : "") +
+         (_fvgNearPoolL or _fvgNearPoolS ? "+FVG" : "") +
+         (_nearRound ? "+Rnd" : "") +
+         (nearPDL or nearPDH ? "+PDL/H" : nearPWL or nearPWH ? "+WkL/H" : "")
+
+    // Row 2 col 0 label
+    string _lvl0 =
+         longSig or shortSig             ? "Levels" :
+         _isPostSweep                    ? "Levels"  :
+         huntDangerBull or huntDangerBear? "Stops"   :
+         inHuntZone                      ? "Pool"    :
+         huntApproaching                 ? "Pool"    : "─"
+
+    // Row 2 col 1
+    string _lvl1 =
+         longSig or shortSig ?
+              "E:"+f_px(close)+"  SL:"+f_px(not na(_dispSL)?_dispSL:dynSLLong)+
+              " ("+(not na(_dispSL)?f_px(math.abs(close-(longSig or inPostSweepWindowL?dynSLLong:dynSLShort)))+"pts":"─")+")" :
+         _isPostSweep ?
+              "E:"+f_px(close)+"  SL:"+f_px(inPostSweepWindowL?dynSLLong:dynSLShort)+
+              " ("+f_px(math.abs(close-(inPostSweepWindowL?dynSLLong:dynSLShort)))+"pts)" :
+         huntDangerBull ?
+              "Stops hit: "+_stopLvlL+"  Wick low: "+f_px(low) :
+         huntDangerBear ?
+              "Stops hit: "+_stopLvlS+"  Wick hi: "+f_px(high) :
+         inHuntZone ?
+              "Stop cluster: "+(huntDangerBull or trendDown?_stopLvlL:_stopLvlS)+"  Stack: "+_stackTypes :
+         huntApproaching ?
+              "Pool: "+(trendDown?_stopLvlL:_stopLvlS)+"  Stack: "+_stackTypes : "─"
+
+    // Row 2 col 2
+    string _lvl2 =
+         longSig or shortSig ?
+              (not na(_dispTP)?"TP:"+f_px(_dispTP)+" ["+(longSig or inPostSweepWindowL?htfPoolBullLabel:htfPoolBearLabel)+"]":
+               "TP:— ["+(longSig or inPostSweepWindowL?htfPoolBullLabel:htfPoolBearLabel)+"]") :
+         _isPostSweep ?
+              (not na(_dispTP)?"TP:"+f_px(_dispTP)+" ["+(inPostSweepWindowL?htfPoolBullLabel:htfPoolBearLabel)+"]":"TP:—") :
+         huntDangerBull or huntDangerBear ?
+              _hgStr+"  "+_stackTypes :
+         inHuntZone or huntApproaching ?
+              _dwellTag+(_dwellTag!=""?"  ":"")+_poolDensity : "─"
+
+    color _lvl0C =
+         longSig or shortSig    ? color.new(c_bull,0)   :
+         _isPostSweep           ? color.new(c_teal,0)   :
+         huntDangerBull or huntDangerBear ? color.new(c_bear,0) :
+         inHuntZone             ? color.new(c_gold,0)   :
+         huntApproaching        ? color.new(c_orange,0) : color.new(c_sub,0)
+    color _lvl1C =
+         longSig or shortSig    ? color.new(c_sub,0)    :
+         _isPostSweep           ? color.new(c_sub,0)    :
+         huntDangerBull or huntDangerBear ? color.new(c_bear,0) :
+         inHuntZone             ? color.new(c_gold,0)   :
+         huntApproaching        ? color.new(c_orange,0) : color.new(c_sub,0)
+    color _lvl2C =
+         longSig                ? (not na(_dispTP)?color.new(c_bull,0):color.new(c_sub,0)) :
+         shortSig               ? (not na(_dispTP)?color.new(c_bear,0):color.new(c_sub,0)) :
+         _isPostSweep           ? color.new(c_teal,0)   :
+         huntDangerBull or huntDangerBear ?
+              (_poolScoreMax?color.new(c_bear,0):_poolScoreHi?color.new(c_orange,0):color.new(c_sub,0)) :
+         inHuntZone or huntApproaching ?
+              (_poolScoreHi?color.new(c_orange,0):color.new(c_sub,0)) : color.new(c_sub,0)
+    color _lvlBG =
+         huntDangerBull or huntDangerBear ? color.new(c_bear,92) :
+         inHuntZone             ? color.new(c_gold,92)   :
+         huntApproaching        ? color.new(c_orange,95) : _tBG
+// ════════════════════════════════════════════════════════════════
+    // TABLE CELLS (10 rows — Row 10 sweep deleted)
+    // ════════════════════════════════════════════════════════════════
+
+    // ── Row 0 — Header ───────────────────────────────────────────────
+    table.cell(hud, 0, 0, "SSP v14.8", text_color=color.new(c_gold,0), bgcolor=_bgH, text_size=_sz, text_halign=_al)
+    table.cell(hud, 1, 0, syminfo.ticker+"  "+sessStr, text_color=color.new(c_sub,0), bgcolor=_bgH, text_size=_sz, text_halign=_al)
+    table.cell(hud, 2, 0, "15m:"+_arr15m+"  "+_sessQ, text_color=(sessQuality>=0.85?color.new(c_bull,0):sessQuality>=0.60?color.new(c_teal,0):sessQuality>=0.40?color.new(c_orange,0):color.new(c_sub,0)), bgcolor=_bgH, text_size=_sz, text_halign=_ar)
+
+// ── Row 1 — Signal (with Big Move override) ──────────────────────
+    string _sigCol2WithEmoji = _sigCol2
+    if _poolScoreHi
+        _sigCol2WithEmoji := "⚠️ " + _sigCol2
+
+    //string _finalSig0 = bigMoveAlert and i_bmEnable ? bmAlertText : _sig0
+    string _dirChar = longSig ? "▲" : shortSig ? "▼" : ""
+    string _finalSig0 = bigMoveAlert and i_bmEnable ? _dirChar + " " + bmAlertText : _sig0
+    string _finalSig1 = bigMoveAlert and i_bmEnable ? bmInfoText : _sig1
+    string _finalSig2 = bigMoveAlert and i_bmEnable ? bmFactors : _sigCol2WithEmoji
+
+    color _finalSig0C = bigMoveAlert and i_bmEnable ? color.white : _sig0C
+    color _finalSig1C = bigMoveAlert and i_bmEnable ? color.white : _sig1C
+    color _finalSig2C = bigMoveAlert and i_bmEnable ? color.new(#FFFFFF, 30) : _sigCol2C
+//
+//    color _finalBG = bigMoveAlert and i_bmEnable ? bmBG : _sigBG2
+    color _finalBG = bigMoveAlert and i_bmEnable ? 
+             (longSig ? color.new(c_bull, 72) : shortSig ? color.new(c_bear, 72) : bmBG) : 
+             _sigBG2
+    string _finalSize = bigMoveScore >= 3 and i_bmEnable ? size.large : _sz
+
+    table.cell(hud, 0, 1, _finalSig0, text_color=_finalSig0C, bgcolor=_finalBG, text_size=_finalSize, text_halign=_ac)
+    table.cell(hud, 1, 1, _finalSig1, text_color=_finalSig1C, bgcolor=_finalBG, text_size=hudSz, text_halign=_al)
+    table.cell(hud, 2, 1, _finalSig2, text_color=_finalSig2C, bgcolor=_finalBG, text_size=hudSz, text_halign=_ar)
+    // ── Row 2 — Levels / Stop detail ─────────────────────────────────
+    table.cell(hud, 0, 2, _lvl0, text_color=_lvl0C, bgcolor=_lvlBG, text_size=_sz, text_halign=_al)
+    table.cell(hud, 1, 2, _lvl1, text_color=_lvl1C, bgcolor=_lvlBG, text_size=_sz, text_halign=_al)
+    table.cell(hud, 2, 2, _lvl2, text_color=_lvl2C, bgcolor=_lvlBG, text_size=_sz, text_halign=_ar)
+
+    // ── Row 3 — KNN ──────────────────────────────────────────────────
+    table.cell(hud, 0, 3, "KNN", text_color=color.new(c_sub,0), bgcolor=_bgN, text_size=_sz, text_halign=_al)
+    table.cell(hud, 1, 3, (_p2Valid2?_arrKNN+" ":"")+_knnPredStr, text_color=_knnC2, bgcolor=_knnBG2, text_size=_sz, text_halign=_al)
+    table.cell(hud, 2, 3, "RR3:"+str.tostring(_p2lbl_hi)+" RR2:"+str.tostring(_p2lbl_good)+" RR1:"+str.tostring(_p2lbl_marg)+"  Q:"+str.tostring(math.round(_p2QualRatio*100))+"%", text_color=_knnC2, bgcolor=_knnBG2, text_size=_sz, text_halign=_ar)
+
+    // ── Row 4 — Inst ─────────────────────────────────────────────────
+    table.cell(hud, 0, 4, "Inst", text_color=_instC, bgcolor=_instBG, text_size=_sz, text_halign=_al)
+    table.cell(hud, 1, 4, _instDoing,  text_color=_instC, bgcolor=_instBG, text_size=_sz, text_halign=_al)
+    table.cell(hud, 2, 4, _instAction, text_color=_instC, bgcolor=_instBG, text_size=_sz, text_halign=_ar)
+
+    // ── Row 5 — Retail (always VSA narrative now) ─────────────────────
+    table.cell(hud, 0, 5, "Retail", text_color=fakeBreakBull or fakeBreakBear?color.new(c_bear,0):_retImplC, bgcolor=vsaRowBG, text_size=_sz, text_halign=_al)
+    table.cell(hud, 1, 5, _emotionRetail + _retImpl,  text_color=_retImplC, bgcolor=vsaRowBG, text_size=_sz, text_halign=_al)
+    table.cell(hud, 2, 5, _retNums2, text_color=_retC2,    bgcolor=vsaRowBG, text_size=_sz, text_halign=_ar)
+
+    // ── Row 6 — Market ───────────────────────────────────────────────
+    table.cell(hud, 0, 6, "Market", text_color=color.new(c_sub,0), bgcolor=_bgN, text_size=_sz, text_halign=_al)
+    table.cell(hud, 1, 6, _arrTrnd+" "+_ctxImpl, text_color=_ctxC, bgcolor=_bgN, text_size=_sz, text_halign=_al)
+    table.cell(hud, 2, 6, _emotionExh + _ctxNums, text_color=f_biasColor(), bgcolor=_bgN, text_size=_sz, text_halign=_ar)
+
+    // ── Row 7 — Flow (always real IOFI/VCO now, no "Sweep live" override)
+    table.cell(hud, 0, 7, "Flow", text_color=color.new(c_sub,0), bgcolor=_bgN, text_size=_sz, text_halign=_al)
+    table.cell(hud, 1, 7, _iofiVcoInterp, text_color=_iofiVcoC, bgcolor=_bgN, text_size=_sz, text_halign=_al)
+    table.cell(hud, 2, 7, _iofivcoNums, text_color=f_biasColor(), bgcolor=_bgN, text_size=_sz, text_halign=_ar)
+
+    // ── Row 8 — Edge ─────────────────────────────────────────────────
+    table.cell(hud, 0, 8, _edgeActionTag, text_color=_edgeActionC, bgcolor=_edgeActionBG, text_size=_sz, text_halign=text.align_center)
+    table.cell(hud, 1, 8, _edgeCol1Text,  text_color=_edgeCol1C,   bgcolor=_edgeBG,       text_size=_sz, text_halign=text.align_left)
+    table.cell(hud, 2, 8, _edgeCol2Full,  text_color=_microCol,    bgcolor=_edgeBG,       text_size=_sz, text_halign=text.align_right)
+
+    // ── Row 9 — Watch+Act + Sweep (MERGED — was two rows in v7.7) ────
+    // When sweep state active: shows crisp badge / now→next / do
+    // When no sweep state:     shows urgency tier / action / RR or context
+    table.cell(hud, 0, 9, _r9c0, text_color=_r9C, bgcolor=_r9BG, text_size=_sz, text_halign=_ac)
+    table.cell(hud, 1, 9, _r9c1, text_color=_r9C, bgcolor=_r9BG, text_size=_sz, text_halign=_al)
+    table.cell(hud, 2, 9, _r9c2, text_color=_r9C, bgcolor=_r9BG, text_size=_sz, text_halign=_ar)
