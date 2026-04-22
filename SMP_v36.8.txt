@@ -1,0 +1,2910 @@
+//@version=5
+indicator("Smart Money Pro — v36.8", shorttitle="SMP v36.8", overlay=true, max_bars_back=1000, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+grp_mode = "Mode"
+i_mode = input.string("Swing", "Trading Mode",
+     options=["Scalp", "Swing", "Invest"], group=grp_mode)
+tf1 = i_mode == "Scalp" ? "15" : i_mode == "Swing" ? "240" : "1W"
+tf2 = i_mode == "Scalp" ? "60" : i_mode == "Swing" ? "1D"  : "1M"
+modeBaseThresh = i_mode == "Scalp" ? 65.0 : i_mode == "Swing" ? 72.0 : 78.0
+grp1 = "Structure"
+swingLen    = input.int(10,    "Swing Length",      group=grp1, minval=3)
+bosBuffer      = input.float(0.02,"BOS Buffer %",                   group=grp1, minval=0.0, step=0.01)
+i_bosSweepMult = input.float(0.15,"Sweep Filter (ATR×)", group=grp1, minval=0.0, maxval=1.0, step=0.05)
+i_idmEnable    = input.bool(true,  "IDM Gate",            group=grp1)
+grp2 = "OB"
+obMaxCount  = input.int(5,    "Max OBs",            group=grp2, minval=1, maxval=10)
+obExtend    = input.int(50,   "Extend OB (bars)",   group=grp2, minval=5, maxval=500)
+obMitigated = input.bool(true,"Hide mitigated", group=grp2)
+grp4 = "── Killzones ──"
+kzAsian     = input.bool(false, "Asian  02-05 ET",        group=grp4)
+kzLondon    = input.bool(true,  "London 03-05 ET",        group=grp4)
+kzNY        = input.bool(true,  "NY     09:30-11 ET",     group=grp4)
+kzNYPM      = input.bool(false, "NY PM  14-16 ET",        group=grp4)
+kzIndia     = input.bool(true,  "India  09:15-15:30 IST", group=grp4)
+grp5 = "── Visuals ──"
+theme        = input.string("Auto",        "Theme",     options=["Auto","Dark","Light"],                                                      group=grp5)
+tablePos     = input.string("Top Right",   "Position",  options=["Top Right","Top Left","Bottom Right","Bottom Left"],                        group=grp5)
+tableSize    = input.string("Small",       "Text Size",  options=["Tiny","Small","Normal","Large"],                                           group=grp5)
+grp_hud = "HUD"
+showTable            = input.bool(true,  "Show HUD",               group=grp_hud)
+grp_ovr = "Overlays"
+showKZ           = input.bool(true,  "KZ",               group=grp_ovr)
+showPDLevels     = input.bool(true,  "PD Levels",     group=grp_ovr)
+showVWAP         = input.bool(true,  "VWAP",                    group=grp_ovr)
+showEMA          = input.bool(true,  "EMA",           group=grp_ovr)
+showVP           = input.bool(true,  "Vol Profile",          group=grp_ovr)
+showOB           = input.bool(true,  "OBs",            group=grp_ovr)
+showEHL          = input.bool(true,  "EQH/EQL",               group=grp_ovr)
+showFVG          = input.bool(true,  "FVG Boxes",               group=grp_ovr)
+showSHBG         = input.bool(true,  "Hunt BG",                 group=grp_ovr)
+showSHWick       = input.bool(true,  "Hunt Wick",               group=grp_ovr)
+showSL           = input.bool(true,  "SL Level",                group=grp_ovr)
+showPVD          = input.bool(false, "PV Div Marks",     group=grp_ovr)
+showLowLiq       = input.bool(false, "LowLiq Color",       group=grp_ovr)
+grp_lbl_c = "Labels"
+showStructLbls   = input.bool(true,  "BOS/MSS",        group=grp_lbl_c)
+showWyStages     = input.bool(true,  "Wyckoff Stages",    group=grp_lbl_c)
+showInstVolLbl   = input.bool(false, "InstVol Labels",      group=grp_lbl_c)
+showHuntTarget   = input.bool(true,  "Hunt Labels",      group=grp_lbl_c)
+showTPLabel      = input.bool(true,  "TP Labels",      group=grp_lbl_c)
+showVSA          = input.bool(true,  "VSA Labels",              group=grp_lbl_c)
+showWyckoff      = input.bool(true,  "Wyckoff Labels",          group=grp_lbl_c)
+showExhaust      = input.bool(true,  "Exhaust Labels",   group=grp_lbl_c)
+showPOC       = true
+showVA        = true
+grp_sh = "Hunt"
+shLookback  = input.int(10,     "Lookback",          group=grp_sh, minval=3)
+shWickRatio = 0.55
+shWickDom   = 2.0
+shBufPct    = 0.1
+grp_adx = "ADX/RSI"
+useADX  = input.bool(true,  "ADX Filter", group=grp_adx)
+adxLen  = input.int(14,     "ADX Length",        group=grp_adx, minval=5)
+adxMin  = 20.0
+var float adaptiveADXMin = 20.0
+var float adxMinEff = 20.0
+useRSI  = input.bool(true,  "RSI Filter", group=grp_adx)
+rsiLen  = input.int(14,     "RSI Length",        group=grp_adx, minval=3)
+grp_liq = "LowLiq"
+lowLiqMult = input.float(0.5,  "Low Liq Threshold × MA", group=grp_liq, minval=0.1, step=0.1)
+grp6 = "── Base Filters ──"
+volMaLen    = input.int(20,   "Volume MA",        group=grp6, minval=5)
+instVolMult = input.float(1.5,"Inst Volume ×",    group=grp6, minval=1.1, step=0.1)
+emaFast     = input.int(9,    "Fast EMA",         group=grp6, minval=1)
+emaSlow     = input.int(21,   "Slow EMA",         group=grp6, minval=1)
+atrLen      = input.int(14,   "ATR Length",       group=grp6, minval=1)
+grp_of = "OrderFlow"
+zDeltaLen    = 50
+zDeltaMin    = 1.0
+clvHigh      = 0.75
+clvLow       = 0.25
+useCLVGate   = input.bool(true, "Use CLV gate",                group=grp_of)
+realtimeSig  = input.bool(true, "Realtime",            group=grp_of)
+useCVDdiv    = input.bool(true, "CVD Div block",     group=grp_of)
+divLen       = input.int(10,    "CVD Slope Lookback",          group=grp_of, minval=5)
+i_cvdLen     = input.int(20,    "CVD Divergence Swing Lookback", group=grp_of, minval=5, maxval=100)
+grp_vwap = "── VWAP Slope ──"
+useVWAPSlope  = input.bool(true,  "VWAP Slope as primary trend", group=grp_vwap)
+slopeLen      = input.int(20,     "Slope Lookback",              group=grp_vwap, minval=5)
+slopeZMult    = 0.6
+useVWAPDir    = input.bool(true,  "Price must be above/below VWAP", group=grp_vwap)
+grp_pd = "── Previous Day Levels ──"
+usePDGate     = input.bool(false, "Require proximity to PD",  group=grp_pd)
+pdAtrMult     = input.float(0.35, "Max PD Distance × ATR",   group=grp_pd, minval=0.1, step=0.05)
+grp_ehl = "── Equal Highs/Lows ──"
+ehlLookback   = input.int(50,   "Lookback (bars)",  group=grp_ehl, minval=10, maxval=200)
+ehlTol        = input.float(0.1,"Tolerance %",      group=grp_ehl, minval=0.01, step=0.01)
+ehlMinTouches = input.int(2,    "Min Touches",      group=grp_ehl, minval=2, maxval=5)
+grp_sltp = "── SL / TP / FVG ──"
+slMult     = input.float(1.5,  "SL × ATR",             group=grp_sltp, minval=0.5, step=0.1)
+fvgMinSize = input.float(0.0,  "Min FVG × ATR",        group=grp_sltp, minval=0.0, step=0.1)
+minRR      = input.float(1.5,  "Min R:R to show TP",   group=grp_sltp, minval=0.5, step=0.1)
+grp_pvd = "── Price-Volume Divergence ──"
+pvdLookback  = input.int(5,      "PVD Lookback",          group=grp_pvd, minval=2, maxval=20)
+pvdAutoMode  = true
+pvdAdaptive  = true
+pvdManual    = 0.70
+grp_vsa = "── VSA ──"
+vsaLookback    = input.int(20,     "VSA Lookback",            group=grp_vsa, minval=10, maxval=50)
+vsaSpreadMult  = input.float(0.7,  "Narrow Spread ×",         group=grp_vsa, minval=0.3, maxval=0.9,  step=0.05)
+vsaWideMult    = input.float(1.3,  "Wide Spread ×",           group=grp_vsa, minval=1.1, maxval=2.0,  step=0.05)
+vsaLowVolMult  = input.float(0.7,  "Low Vol ×",               group=grp_vsa, minval=0.3, maxval=0.9,  step=0.05)
+vsaHighVolMult = input.float(1.3,  "High Vol ×",              group=grp_vsa, minval=1.1, maxval=2.0,  step=0.05)
+grp_vp = "VolProfile"
+vpLookback = input.int(50,     "VP Lookback",     group=grp_vp, minval=20, maxval=200)
+vpBuckets  = 20
+vpExtend   = 30
+vpBarWidth = 0.8
+grp_wy = "── Wyckoff ──"
+wyLookback  = input.int(50,     "Wyckoff Lookback",      group=grp_wy, minval=20, maxval=200)
+wyVolMult   = input.float(1.5,  "High Vol ×",            group=grp_wy, minval=1.1, step=0.1)
+wySpringTol = input.float(0.3,  "Spring Tolerance × ATR",group=grp_wy, minval=0.1, step=0.05)
+grp_pred = "── Prediction Engine ──"
+i_memLen       = input.int(5,    "Signal Memory (bars)",        group=grp_pred, minval=1, maxval=20)
+grp_dyn = "── Dynamic Adaptation ──"
+i_dynEnable      = input.bool(true,  "Enable Dynamic",       group=grp_dyn)
+i_feedbackEnable = input.bool(true,  "Feedback Loop Self-Assessment",    group=grp_dyn)
+i_adaptSpeed     = 0.1
+i_regimeLen      = 20
+i_regimeMinBars  = 3
+grp_vco = "── v18: Volatility Cycle (VCO) ──"
+i_vcoEnable   = input.bool(true,  "Enable VCO",              group=grp_vco)
+i_vcoATRShort = 7
+i_vcoATRLong  = 28
+i_vcoPressLen = 14
+i_vcoThresh   = input.float(55.0, "VCO Breakout Threshold",  group=grp_vco, minval=30.0, maxval=90.0, step=5.0)
+grp_iofi = "── v18: Order Flow Imbalance (IOFI) ──"
+i_iofiEnable  = input.bool(true,  "Enable IOFI",      group=grp_iofi)
+i_iofiImbal   = 1.8
+i_iofiLen     = 20
+grp_cmp = "── v18: Composite Momentum Phase (CMP) ──"
+i_cmpEnable   = input.bool(true,  "Enable CMP Phase Gate", group=grp_cmp)
+i_cmpFast     = 8
+i_cmpMid      = 21
+i_cmpSlow     = 55
+grp_cc = "CandleColors"
+enableCandleColors = input.bool(true, "Enable Custom Candle Colors", group=grp_cc)
+cc_wySpring     = input.color(color.new(#BB86FC, 0),  "Wyckoff Spring",     group=grp_cc, inline="wy1")
+cc_wySpringOn   = input.bool(true,                    "Show",               group=grp_cc, inline="wy1")
+cc_wySOS        = input.color(color.new(#00FF88, 20), "Wyckoff SOS",        group=grp_cc, inline="wy2")
+cc_wySOSOn      = input.bool(true,                    "Show",               group=grp_cc, inline="wy2")
+cc_wySOW        = input.color(color.new(#FF2952, 20), "Wyckoff SOW",        group=grp_cc, inline="wy3")
+cc_wySOWOn      = input.bool(true,                    "Show",               group=grp_cc, inline="wy3")
+cc_exhaustBull  = input.color(color.new(#00BCD4, 20), "Exhaustion Bull",    group=grp_cc, inline="ex1")
+cc_exhaustBullOn= input.bool(true,                    "Show",               group=grp_cc, inline="ex1")
+cc_exhaustBear  = input.color(color.new(#FF69B4, 20), "Exhaustion Bear",    group=grp_cc, inline="ex2")
+cc_exhaustBearOn= input.bool(true,                    "Show",               group=grp_cc, inline="ex2")
+cc_huntBull     = input.color(color.new(#FFD700, 10), "Stop Hunt Bull",     group=grp_cc, inline="sh1")
+cc_huntBullOn   = input.bool(true,                    "Show",               group=grp_cc, inline="sh1")
+cc_huntBear     = input.color(color.new(#FFD700, 10), "Stop Hunt Bear",     group=grp_cc, inline="sh2")
+cc_huntBearOn   = input.bool(true,                    "Show",               group=grp_cc, inline="sh2")
+cc_vsaSC        = input.color(color.new(#FF3B3B, 10), "VSA Selling Climax", group=grp_cc, inline="vs1")
+cc_vsaSCOn      = input.bool(true,                    "Show",               group=grp_cc, inline="vs1")
+cc_vsaBC        = input.color(color.new(#00C076, 10), "VSA Buying Climax",  group=grp_cc, inline="vs2")
+cc_vsaBCOn      = input.bool(true,                    "Show",               group=grp_cc, inline="vs2")
+cc_vsaND        = input.color(color.new(#888888, 20), "VSA No Demand",      group=grp_cc, inline="vs3")
+cc_vsaNDOn      = input.bool(true,                    "Show",               group=grp_cc, inline="vs3")
+cc_vsaNS        = input.color(color.new(#888888, 20), "VSA No Supply",      group=grp_cc, inline="vs4")
+cc_vsaNSOn      = input.bool(true,                    "Show",               group=grp_cc, inline="vs4")
+cc_lowLiq       = input.color(color.new(#000000,  0), "Low Liquidity",      group=grp_cc, inline="ll1")
+cc_lowLiqOn     = input.bool(true,                    "Show",               group=grp_cc, inline="ll1")
+isDarkChart = color.r(chart.bg_color) < 80 and color.g(chart.bg_color) < 80 and color.b(chart.bg_color) < 80
+isDark      = theme == "Dark" or (theme == "Auto" and isDarkChart)
+c_bg    = isDark ? color.new(#0D0D0D,0)  : color.new(#FFFFFF,0)
+c_sub   = isDark ? color.new(#888888,0)  : color.new(#555555,0)
+c_hdr   = isDark ? color.new(#1A1A2E,0)  : color.new(#E8E8E8,0)
+c_hdr2  = isDark ? color.new(#0D2137,0)  : color.new(#D0E8F0,0)
+c_hdr3  = isDark ? color.new(#1A0D2E,0)  : color.new(#F0D0F0,0)
+c_bull  = color.new(#00C076,0)
+c_bear  = color.new(#FF3B3B,0)
+c_bull_f= color.new(#00C076,88)
+c_bear_f= color.new(#FF3B3B,88)
+c_gold  = color.new(#FFD700,0)
+c_orange= color.new(#FF6B00,0)
+c_teal  = color.new(#00BCD4,0)
+c_pink  = color.new(#FF69B4,0)
+c_wy    = color.new(#BB86FC,0)
+c_vsa_nd   = color.new(#FF6B00,0)
+c_vsa_ns   = color.new(#4488FF,0)
+c_vsa_sc   = color.new(#FF3B3B,0)
+c_vsa_bc   = color.new(#00C076,0)
+c_vsa_test = color.new(#FFD700,0)
+c_vsa_eff  = color.new(#FF69B4,0)
+c_vsa_th   = color.new(#00BCD4,0)
+c_pdh   = color.new(#FF3B3B,40)
+c_pdl   = color.new(#00C076,40)
+c_pdc   = color.new(#888888,40)
+c_pdvwap= color.new(#4488FF,40)
+tSize   = tableSize == "Tiny" ? size.tiny : tableSize == "Normal" ? size.normal : tableSize == "Large" ? size.large : size.small
+c_modeScalp  = color.new(#FF6B00,0)
+c_modeSwing  = color.new(#00C076,0)
+c_modeInvest = color.new(#BB86FC,0)
+c_mode = i_mode == "Scalp" ? c_modeScalp : i_mode == "Swing" ? c_modeSwing : c_modeInvest
+lb    = int(swingLen)
+shLB  = int(shLookback)
+vmaL  = int(volMaLen)
+atrL  = int(atrLen)
+emaF  = int(emaFast)
+emaS  = int(emaSlow)
+adxL  = int(adxLen)
+rsiL  = int(rsiLen)
+wyLB  = int(wyLookback)
+pvdLB = int(pvdLookback)
+f_pvdBase(tf) =>
+    tf == "1" ? 0.60 : tf == "5" ? 0.70 : tf == "15" ? 0.75 : tf == "30" ? 0.78 : tf == "60" ? 0.80 : tf == "240" ? 0.82 : tf == "1D" ? 0.85 : tf == "1W" ? 0.88 : 0.92
+f_currentTF() =>
+    timeframe.in_seconds() <= 60 ? "1" : timeframe.in_seconds() <= 300 ? "5" : timeframe.in_seconds() <= 900 ? "15" : timeframe.in_seconds() <= 1800 ? "30" : timeframe.in_seconds() <= 3600 ? "60" : timeframe.in_seconds() <= 14400 ? "240" : timeframe.in_seconds() <= 86400 ? "1D" : timeframe.in_seconds() <= 604800 ? "1W" : "1M"
+f_tfL(tf) =>
+    tf == "1" ? "1m" : tf == "5" ? "5m" : tf == "15" ? "15m" : tf == "30" ? "30m" : tf == "60" ? "1H" : tf == "240" ? "4H" : tf == "1D" ? "1D" : tf == "1W" ? "1W" : "1M"
+f_mem(isCurrent, isMemory, fullPts) =>
+    isCurrent ? fullPts : isMemory ? math.round(fullPts * 0.7) : 0
+f_sigmoid(x, maxRaw) =>
+    _z  = maxRaw > 0 ? (x / maxRaw - 0.5) * 8.0 : 0.0
+    _ez = math.exp(-math.abs(_z))
+    _s  = _z >= 0 ? 1.0 / (1.0 + _ez) : _ez / (1.0 + _ez)
+    math.round(math.max(math.min(_s, 1.0), 0.0) * 100)
+f_tfWeight(tf) =>
+    tf == "1M" ? 2.2 : tf == "1W" ? 1.9 : tf == "1D" ? 1.6 : tf == "240" ? 1.3 : tf == "60" ? 1.1 : tf == "30" ? 1.0 : tf == "15" ? 0.9 : tf == "5" ? 0.8 : 0.7
+atr      = ta.atr(atrL)
+atrMA    = ta.sma(atr, 20)
+atrRatio = atrMA > 0 ? atr / atrMA : 1.0
+
+var float kf_pos = close
+var float kf_vel = 0.0
+var float kf_p00 = 1.0,  var float kf_p01 = 0.0
+var float kf_p10 = 0.0,  var float kf_p11 = 1.0
+float kf_q0 = atr * 0.008
+float kf_q1 = atr * 0.0008
+float kf_Rv = atr * 0.08
+float kf_px_pred = kf_pos + kf_vel
+float kf_pv_pred = kf_vel
+float _kfp00 = kf_p00 + kf_p10 + kf_p01 + kf_p11 + kf_q0
+float _kfp01 = kf_p01 + kf_p11
+float _kfp10 = kf_p10 + kf_p11
+float _kfp11 = kf_p11 + kf_q1
+float kf_y   = close - kf_px_pred
+float kf_S   = _kfp00 + kf_Rv
+float kf_k0  = _kfp00 / math.max(kf_S, syminfo.mintick)
+float kf_k1  = _kfp10 / math.max(kf_S, syminfo.mintick)
+kf_pos      := kf_px_pred + kf_k0 * kf_y
+kf_vel      := kf_pv_pred + kf_k1 * kf_y
+kf_p00      := (1.0 - kf_k0) * _kfp00
+kf_p01      := (1.0 - kf_k0) * _kfp01
+kf_p10      := -kf_k1 * _kfp00 + _kfp10
+kf_p11      := -kf_k1 * _kfp01 + _kfp11
+bool  kalmanBull     = kf_vel > 0 and kf_vel > kf_vel[1]
+bool  kalmanBear     = kf_vel < 0 and kf_vel < kf_vel[1]
+bool  kalmanFlipUp   = kf_vel > 0 and kf_vel[1] <= 0
+bool  kalmanFlipDown = kf_vel < 0 and kf_vel[1] >= 0
+float kalmanMid      = kf_pos
+float kf_velMA  = ta.sma(math.abs(kf_vel), 20)
+float kf_velSD  = ta.stdev(kf_vel, 20)
+float kf_velZ   = kf_velSD > 0 ? kf_vel / kf_velSD : 0.0
+bool  kalmanTrendUp    = kf_velZ >  0.5
+bool  kalmanTrendDown  = kf_velZ < -0.5
+
+volMA      = ta.sma(volume, vmaL)
+volRatio   = volume / volMA
+vsaVolAvg  = ta.sma(volume, vsaLookback)
+wyVolAvgG  = ta.sma(volume, wyLB)
+float volRatioPercentile = ta.percentrank(volRatio, math.min(50, bar_index + 1))
+isInstVol  = volRatioPercentile >= 85
+isLowLiq   = volRatioPercentile <= 10
+isBull     = close > open
+isBear     = close < open
+emaFastL   = ta.ema(close, emaF)
+emaSlowL   = ta.ema(close, emaS)
+[_, _, adxVal] = ta.dmi(adxL, adxL)
+isTrending     = not useADX or adxVal >= adxMinEff
+rsiVal         = ta.rsi(close, rsiL)
+isHighV        = volume > vsaVolAvg * vsaHighVolMult
+var bool rsiBullState = false
+var bool rsiBearState = false
+if rsiVal > 55
+    rsiBullState := true
+    rsiBearState := false
+else if rsiVal < 45
+    rsiBearState := true
+    rsiBullState := false
+rsiBull = not useRSI or rsiBullState
+rsiBear = not useRSI or rsiBearState
+
+vwapLine        = ta.vwap(hlc3)
+bullFlow        = close > vwapLine
+bearFlow        = close < vwapLine
+barsIntoSession = ta.barssince(ta.change(time("D")) != 0)
+vwapSlopeValid  = barsIntoSession >= slopeLen
+vwapSlope       = vwapLine - vwapLine[slopeLen]
+vwapStd         = ta.stdev(vwapLine, 5 * slopeLen)
+vwapSlopeOk     = math.abs(vwapSlope) > slopeZMult * vwapStd
+emaSlope        = emaFastL - emaFastL[slopeLen]
+emaStd          = ta.stdev(emaFastL, slopeLen)
+emaSlopeOk      = math.abs(emaSlope) > slopeZMult * emaStd
+trendUp   = useVWAPSlope ? (vwapSlopeValid ? (vwapSlopeOk and vwapSlope > 0) : (emaSlopeOk and emaSlope > 0)) : emaFastL > emaSlowL
+trendDown = useVWAPSlope ? (vwapSlopeValid ? (vwapSlopeOk and vwapSlope < 0) : (emaSlopeOk and emaSlope < 0)) : emaFastL < emaSlowL
+rng_of    = math.max(high - low, syminfo.mintick)
+clv       = rng_of > 0 ? (close - low) / rng_of : 0.5
+delta_of  = volume * (2 * (close - low) / rng_of - 1)
+cvd_of    = ta.cum(delta_of)
+deltaMean = ta.sma(delta_of, zDeltaLen)
+deltaStd  = ta.stdev(delta_of, zDeltaLen)
+zDelta    = deltaStd > 0 ? (delta_of - deltaMean) / deltaStd : 0.0
+
+float zDeltaAbs = math.abs(zDelta)
+float zDeltaPercentile = ta.percentrank(zDeltaAbs, math.min(50, bar_index + 1))
+float zDeltaThreshold = 85.0
+bool zDeltaBull = zDelta > 0 and zDeltaPercentile >= zDeltaThreshold
+bool zDeltaBear = zDelta < 0 and zDeltaPercentile >= zDeltaThreshold
+adaptiveZMin = 1.0
+priceSlopeL   = close  - close[divLen]
+cvdSlopeL     = cvd_of - cvd_of[divLen]
+pricePctMove  = close[divLen] != 0 ? math.abs(priceSlopeL) / close[divLen] : 0.0
+cvdRange      = ta.highest(math.abs(delta_of), divLen)
+cvdPctMove    = cvdRange > 0 ? math.abs(cvdSlopeL) / (cvdRange * divLen) : 0.0
+divSignificant= pricePctMove > 0.002 and cvdPctMove > 0.1
+bullDiv       = priceSlopeL < 0 and cvdSlopeL > 0 and divSignificant
+bearDiv       = priceSlopeL > 0 and cvdSlopeL < 0 and divSignificant
+divBlockLong  = useCVDdiv and bearDiv
+divBlockShrt  = useCVDdiv and bullDiv
+_barDelta       = volume * (close >= open ? 1.0 : close == open ? 0.0 : -1.0)
+_cvdInline      = ta.cum(_barDelta)
+priceLowerLow   = low  < ta.lowest(low,             i_cvdLen)[1]
+priceHigherHigh = high > ta.highest(high,            i_cvdLen)[1]
+cvdHigherLow    = _cvdInline > ta.lowest(_cvdInline, i_cvdLen)[1]
+cvdLowerHigh    = _cvdInline < ta.highest(_cvdInline,i_cvdLen)[1]
+cvdDivValid     = pricePctMove > 0.002
+cvdBullDiv      = priceLowerLow   and cvdHigherLow  and cvdDivValid and not divBlockLong
+cvdBearDiv      = priceHigherHigh and cvdLowerHigh  and cvdDivValid and not divBlockShrt
+clvBull = not useCLVGate or clv >= clvHigh
+clvBear = not useCLVGate or clv <= clvLow
+exhaust     = math.abs(zDelta[1]) >= (adaptiveZMin + 0.5) and math.sign(zDelta) == -math.sign(zDelta[1]) and math.sign(close - close[1]) == -math.sign(close[1] - close[2])
+exhaustBull = exhaust and close > close[1]
+exhaustBear = exhaust and close < close[1]
+newDay = ta.change(time("D")) != 0
+var float dHigh   = na
+var float dLow    = na
+var float dClose  = na
+var float dCumPV  = na
+var float dCumVol = na
+var float dVWAP   = na
+if barstate.isfirst
+    dHigh   := high
+    dLow    := low
+    dClose  := close
+    dCumPV  := hlc3 * volume
+    dCumVol := volume
+    dVWAP   := dCumPV / dCumVol
+else
+    if newDay
+        dHigh   := high
+        dLow    := low
+        dClose  := close
+        dCumPV  := hlc3 * volume
+        dCumVol := volume
+    else
+        dHigh   := math.max(nz(dHigh, high), high)
+        dLow    := math.min(nz(dLow,  low),  low)
+        dClose  := close
+        dCumPV  += hlc3 * volume
+        dCumVol += volume
+    dVWAP := dCumPV / dCumVol
+var float pdh    = na
+var float pdl    = na
+var float pdc    = na
+var float pdvwap = na
+if newDay
+    pdh    := nz(dHigh[1],  pdh)
+    pdl    := nz(dLow[1],   pdl)
+    pdc    := nz(dClose[1], pdc)
+    pdvwap := nz(dVWAP[1],  pdvwap)
+distToPD = math.min(math.min(math.abs(close - nz(pdh, close)), math.abs(close - nz(pdl, close))), math.min(math.abs(close - nz(pdc, close)), math.abs(close - nz(pdvwap, close))))
+pdPass = not usePDGate or (atr > 0 and distToPD <= pdAtrMult * atr)
+plot(showPDLevels and not na(pdh)    ? pdh    : na, "PDH",    color=c_pdh,               linewidth=1, display=display.pane)
+plot(showPDLevels and not na(pdl)    ? pdl    : na, "PDL",    color=c_pdl,               linewidth=1, display=display.pane)
+plot(showPDLevels and not na(pdc)    ? pdc    : na, "PDC",    color=c_pdc,               linewidth=1, display=display.pane)
+plot(showPDLevels and not na(pdvwap) ? pdvwap : na, "PDVWAP", color=c_pdvwap,            linewidth=1, display=display.pane)
+plot(vwapLine  and showVWAP ? vwapLine  : na, "VWAP",     color=color.new(#4488FF,60), linewidth=1, display=display.pane)
+plot(emaFastL  and showEMA  ? emaFastL  : na, "EMA Fast", color=color.new(#00C076,70), linewidth=1, display=display.pane)
+plot(emaSlowL  and showEMA  ? emaSlowL  : na, "EMA Slow", color=color.new(#FF3B3B,70), linewidth=1, display=display.pane)
+curTFStr  = f_currentTF()
+volStdDev = ta.stdev(volume, 20)
+volCV     = volMA > 0 ? volStdDev / volMA : 0.0
+cvAdjust  = math.min(math.max(volCV * 0.10, -0.10), 0.10)
+f_adaptPVD(baseTF) =>
+    _b = f_pvdBase(baseTF)
+    pvdAdaptive ? math.min(math.max(_b + cvAdjust, _b - 0.10), _b + 0.10) : _b
+pvdMax    = pvdAutoMode ? f_adaptPVD(curTFStr) : pvdManual
+pvHighest = ta.highest(close, pvdLB)
+pvLowest  = ta.lowest(close,  pvdLB)
+pvDivBear = showPVD and close >= pvHighest * 0.999 and volRatio <= pvdMax and trendUp   and not isInstVol
+pvDivBull = showPVD and close <= pvLowest  * 1.001 and volRatio <= pvdMax and trendDown and not isInstVol
+plotshape(pvDivBear, title="PV Div Bear", style=shape.xcross, location=location.abovebar, color=color.new(c_bear,30), size=size.tiny)
+plotshape(pvDivBull, title="PV Div Bull", style=shape.xcross, location=location.belowbar, color=color.new(c_bull,30), size=size.tiny)
+shPrevHigh = ta.highest(high[1], shLB)
+shPrevLow  = ta.lowest(low[1],   shLB)
+cSizeSH    = high - low + syminfo.mintick
+upWickSH   = high - math.max(open, close)
+dnWickSH   = math.min(open, close) - low
+upWickR    = upWickSH / cSizeSH
+dnWickR    = dnWickSH / cSizeSH
+float domRatioBull = dnWickSH / math.max(upWickSH, syminfo.mintick)
+float domRatioBear = upWickSH / math.max(dnWickSH, syminfo.mintick)
+
+int wickLookback = math.min(50, bar_index + 1)
+
+float dnWickPercentile = ta.percentrank(dnWickR, wickLookback)
+float domBullPercentile = ta.percentrank(domRatioBull, wickLookback)
+bool strongWickBull = dnWickPercentile >= 85 and domBullPercentile >= 85
+
+float upWickPercentile = ta.percentrank(upWickR, wickLookback)
+float domBearPercentile = ta.percentrank(domRatioBear, wickLookback)
+bool strongWickBear = upWickPercentile >= 85 and domBearPercentile >= 85
+
+bufUp      = shPrevHigh * (1 + shBufPct / 100)
+bufDn      = shPrevLow  * (1 - shBufPct / 100)
+isHuntBull = (strongWickBull and low < shPrevLow and close > shPrevLow) or (low <= bufDn and close > shPrevLow)
+isHuntBear = (strongWickBear and high > shPrevHigh and close < shPrevHigh) or (high >= bufUp and close < shPrevHigh)
+if showSHWick and isHuntBull
+    line.new(bar_index-1, shPrevLow,  bar_index+5, shPrevLow,  color=color.new(c_orange,20), width=1, style=line.style_dashed)
+if showSHWick and isHuntBear
+    line.new(bar_index-1, shPrevHigh, bar_index+5, shPrevHigh, color=color.new(c_orange,20), width=1, style=line.style_dashed)
+vsaSpreadMA = ta.sma(high - low, vsaLookback)
+spread      = high - low
+closePos    = spread > 0 ? (close - low) / spread : 0.5
+float spreadPercentile = ta.percentrank(high - low, 50)
+bool isNarrow = (high - low) > 0 and spreadPercentile <= 20
+bool isWide   = (high - low) > 0 and spreadPercentile >= 80
+int volLookbackAnomaly = math.min(50, bar_index + 1)
+float volPercentile = ta.percentrank(volume, volLookbackAnomaly)
+
+bool isHighV2 = volume > 0 and volPercentile >= 90
+bool isLowV   = volume > 0 and volPercentile <= 10
+
+bool isExtremeVolumeSpike = volume > ta.highest(volume[1], 20) * 1.5
+isHighV2 := isHighV2 or isExtremeVolumeSpike
+cHigh_vsa   = closePos >= 0.6
+cLow_vsa    = closePos <= 0.4
+cMid_vsa    = closePos  > 0.4 and closePos < 0.6
+vsaNoDemand      = isNarrow and isLowV  and not cHigh_vsa and trendUp
+vsaNoSupply      = isNarrow and isLowV  and not cLow_vsa  and trendDown
+vsaSellingClimax = isWide   and isHighV2 and isBear and cLow_vsa
+vsaBuyingClimax  = isWide   and isHighV2 and isBull and cHigh_vsa
+vsaTest          = isNarrow and isLowV  and low < low[1] and close > low[1] and trendUp
+vsaEffortBear    = isWide   and isHighV2 and isBear and cMid_vsa
+vsaThrust        = isWide   and isHighV2 and isBull and cHigh_vsa and not trendUp
+if showVSA and barstate.isconfirmed
+    if vsaNoDemand
+        label.new(bar_index, high, "ND",  yloc=yloc.abovebar, color=color.new(c_vsa_nd,20), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if vsaNoSupply
+        label.new(bar_index, low,  "NS",  yloc=yloc.belowbar, color=color.new(c_vsa_ns,20), textcolor=color.white, style=label.style_label_up,   size=size.tiny)
+    if vsaSellingClimax
+        label.new(bar_index, low,  "SC",  yloc=yloc.belowbar, color=color.new(c_vsa_sc,10), textcolor=color.white, style=label.style_label_up,   size=size.small)
+    if vsaBuyingClimax
+        label.new(bar_index, high, "BC",  yloc=yloc.abovebar, color=color.new(c_vsa_bc,10), textcolor=color.white, style=label.style_label_down, size=size.small)
+    if vsaTest
+        label.new(bar_index, low,  "T",   yloc=yloc.belowbar, color=color.new(c_vsa_test,20), textcolor=color.black, style=label.style_label_up, size=size.tiny)
+    if vsaEffortBear
+        label.new(bar_index, low,  "E↑",  yloc=yloc.belowbar, color=color.new(c_vsa_eff,20), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if vsaThrust
+        label.new(bar_index, low,  "TH",  yloc=yloc.belowbar, color=color.new(c_vsa_th,20),  textcolor=color.white, style=label.style_label_up, size=size.tiny)
+absorptionBull = isBear and isHighV2 and spread < atr * 0.25 and not isNarrow
+absorptionBear = isBull  and isHighV2 and spread < atr * 0.25 and not isNarrow
+var bool bullBOSConfirmed = false
+var bool bearBOSConfirmed = false
+var bool bullBOSFailed    = false
+var bool bearBOSFailed    = false
+
+wyVolAvg = wyVolAvgG
+wyHigh   = ta.highest(high, wyLB)
+wyLow    = ta.lowest(low,   wyLB)
+wyHiV    = volume > wyVolAvg * wyVolMult
+wyLoV    = volume < wyVolAvg * 0.7
+wyWkDn   = (math.min(open,close) - low)         / math.max(high-low, syminfo.mintick)
+wyWkUp   = (high - math.max(open,close))         / math.max(high-low, syminfo.mintick)
+wyPS  = trendDown and isBull and wyHiV and high >= wyHigh * 0.97 and close >= wyHigh * 0.95
+wySC  = isBear and wyHiV and isWide and low <= wyLow * 1.005 and wyWkDn >= 0.3 and trendDown
+wyAR  = isBull and not wyHiV and low <= wyLow * 1.01 and cHigh_vsa and (wySC[1] or wySC[2] or wySC[3] or wySC[4] or wySC[5] or wySC[6] or wySC[7] or wySC[8] or wySC[9] or wySC[10])
+wyST  = low <= wyLow * 1.02 and low > wyLow * 0.98 and wyLoV and not isBear and not wySC
+wySpringRaw       = low < wyLow - atr * wySpringTol and close > wyLow and wyLoV and wyWkDn >= 0.5
+wySpringConfirmed = wySpringRaw[1] and close > high[1] and volume > volume[1] * 1.2 and isBull
+wySpring          = wySpringConfirmed
+wyARH = ta.highest(high, math.min(wyLB, 30))
+wySOS = isBull and wyHiV and isWide and close > wyARH * 0.995 and trendDown
+wyUT  = high > wyHigh[1] and close < wyHigh[1] and wyHiV and wyWkUp >= 0.4
+wySOW = isBear and wyHiV and isWide and cLow_vsa and trendUp
+var string wyPhase       = "No Pattern"
+var int    wySCbar       = 0
+var int    wyARbar       = 0
+var int    wySPRbar      = 0
+var int    wyUTbar       = 0
+var bool   wyAccumActive = false
+var bool   wyDistribActive = false
+var int    wyPipelineStage = 0
+if wySC
+    wyPhase         := "🔴 Panic Sell — watch"
+    wySCbar         := bar_index
+    wyAccumActive   := true
+    wyDistribActive := false
+    wyPipelineStage := 1
+if wyAR and bar_index - wySCbar <= 20
+    wyPhase         := "🟡 Bounce — range top set"
+    wyARbar         := bar_index
+    wyPipelineStage := 2
+if wyST and bar_index - wyARbar <= 30
+    wyPhase         := "🟡 Sellers drying up"
+    wyPipelineStage := 3
+if wySpring and bar_index - wySCbar <= 60 and wyAccumActive
+    wyPhase          := "🟢 FALSE BREAK — BUY dip"
+    wySPRbar         := bar_index
+    wyPipelineStage  := 4
+if wySOS and bar_index - wySPRbar <= 20 and wyPipelineStage >= 4
+    wyPhase         := "🟢 BREAKOUT — go long"
+    wyPipelineStage := 5
+if wyPS
+    wyPhase          := "🔴 Supply entering — caution"
+    wyDistribActive  := true
+    wyAccumActive    := false
+    wyPipelineStage  := 1
+if wyUT
+    wyPhase         := "🔴 FALSE BREAK — SELL rally"
+    wyUTbar         := bar_index
+    wyPipelineStage := 2
+if wySOW and bar_index - wyUTbar <= 30 and wyDistribActive
+    wyPhase         := "🔴 BREAKDOWN — go short"
+    wyPipelineStage := 3
+wySpringValid = wySpring and wyAccumActive and bar_index - wySCbar <= 60
+wySOSValid    = wySOS    and wyPipelineStage >= 4 and bar_index - wySPRbar <= 20
+wySOWValid    = wySOW    and wyDistribActive
+wyUTValid     = wyUT     and wyDistribActive
+if showWyckoff and showWyStages and barstate.isconfirmed
+    if wySC
+        label.new(bar_index, low,  "WY:SC",     yloc=yloc.belowbar, color=color.new(c_wy,10),   textcolor=color.white, style=label.style_label_up,   size=size.tiny)
+    if wyAR
+        label.new(bar_index, high, "WY:AR",     yloc=yloc.abovebar, color=color.new(c_wy,30),   textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if wyST
+        label.new(bar_index, low,  "WY:ST",     yloc=yloc.belowbar, color=color.new(c_wy,40),   textcolor=color.white, style=label.style_label_up,   size=size.tiny)
+    if wySpringValid
+        label.new(bar_index, low,  "WY:SPR ⚡", yloc=yloc.belowbar, color=color.new(#BB86FC,0), textcolor=color.white, style=label.style_label_up,   size=size.small)
+    if wySOSValid
+        label.new(bar_index, high, "WY:SOS ✅", yloc=yloc.abovebar, color=color.new(c_bull,10), textcolor=color.white, style=label.style_label_down, size=size.small)
+    if wyUT
+        label.new(bar_index, high, "WY:UT",     yloc=yloc.abovebar, color=color.new(c_bear,10), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if wySOWValid
+        label.new(bar_index, low,  "WY:SOW ⚠", yloc=yloc.belowbar, color=color.new(c_bear,10), textcolor=color.white, style=label.style_label_up,   size=size.small)
+    if wyPS
+        label.new(bar_index, high, "WY:PS",     yloc=yloc.abovebar, color=color.new(c_wy,30),   textcolor=color.white, style=label.style_label_down, size=size.tiny)
+phSeries = ta.pivothigh(high, lb, lb)
+plSeries = ta.pivotlow(low,   lb, lb)
+swingHigh = phSeries
+swingLow  = plSeries
+ehlTolAmt = close * ehlTol / 100
+var line  eqHL  = na
+var line  eqLL  = na
+var float eqHLv = na
+var float eqLLv = na
+var int   eqHCt = 0
+var int   eqLCt = 0
+if not na(swingHigh)
+    count = 0
+    lvl   = swingHigh
+    for i = 1 to int(ehlLookback)
+        if not na(phSeries[i])
+            if math.abs(phSeries[i] - lvl) <= ehlTolAmt
+                count += 1
+    if count >= ehlMinTouches - 1
+        eqHLv := lvl
+        eqHCt := count + 1
+        if not na(eqHL)
+            line.delete(eqHL)
+        eqHL := line.new(bar_index - int(ehlLookback), lvl, bar_index+10, lvl, color=color.new(c_bear,30), width=1, style=line.style_dashed)
+        if showEHL
+            label.new(bar_index - lb, lvl, "EQH ×" + str.tostring(eqHCt), yloc=yloc.abovebar, color=color.new(c_bear,20), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+if not na(swingLow)
+    count = 0
+    lvl   = swingLow
+    for i = 1 to int(ehlLookback)
+        if not na(plSeries[i])
+            if math.abs(plSeries[i] - lvl) <= ehlTolAmt
+                count += 1
+    if count >= ehlMinTouches - 1
+        eqLLv := lvl
+        eqLCt := count + 1
+        if not na(eqLL)
+            line.delete(eqLL)
+        eqLL := line.new(bar_index - int(ehlLookback), lvl, bar_index+10, lvl, color=color.new(c_bull,30), width=1, style=line.style_dashed)
+        if showEHL
+            label.new(bar_index - lb, lvl, "EQL ×" + str.tostring(eqLCt), yloc=yloc.belowbar, color=color.new(c_bull,20), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+nearEQH    = not na(eqHLv) and math.abs(close - eqHLv) <= ehlTolAmt * 3
+nearEQL    = not na(eqLLv) and math.abs(close - eqLLv) <= ehlTolAmt * 3
+eqHighZone = nearEQH
+eqLowZone  = nearEQL
+var float lastHH = na
+var float lastHL = na
+var float lastLL = na
+var float lastLH = na
+if not na(swingHigh)
+    if na(lastHH) or swingHigh > lastHH
+        lastHH := swingHigh
+    if trendDown and (na(lastLH) or swingHigh < lastLH)
+        lastLH := swingHigh
+if not na(swingLow)
+    if na(lastLL) or swingLow < lastLL
+        lastLL := swingLow
+    if trendUp and (na(lastHL) or swingLow > lastHL)
+        lastHL := swingLow
+bosAmt  = close * bosBuffer / 100
+bullBOS = not na(lastHH) and close > lastHH + bosAmt and close[1] <= lastHH + bosAmt
+bearBOS = not na(lastLL) and close < lastLL - bosAmt and close[1] >= lastLL - bosAmt
+bullMSS = (trendDown or kalmanTrendDown) and not na(lastLH) and close > lastLH + bosAmt and close[1] <= lastLH + bosAmt
+bearMSS = (trendUp   or kalmanTrendUp)   and not na(lastHL) and close < lastHL - bosAmt and close[1] >= lastHL - bosAmt
+
+_bBOSV = bullBOS and (close - lastHH) >= atr * i_bosSweepMult
+_brBOSV = bearBOS and (lastLL - close) >= atr * i_bosSweepMult
+_bSWP = bullBOS and not _bBOSV
+_brSWP = bearBOS and not _brBOSV
+
+bool kalmanBullBOS  = bullBOS  and (kalmanBull   or kalmanFlipUp)
+bool kalmanBearBOS  = bearBOS  and (kalmanBear   or kalmanFlipDown)
+bool kalmanBullMSS  = bullMSS  and kalmanTrendUp
+bool kalmanBearMSS  = bearMSS  and kalmanTrendDown
+bool earlyBullBOS   = not bullBOS and kalmanFlipUp   and not na(lastHH) and close > lastHH * 0.998 and kf_velZ >  1.0
+bool earlyBearBOS   = not bearBOS and kalmanFlipDown and not na(lastLL) and close < lastLL * 1.002 and kf_velZ < -1.0
+var int  bosBullBar  = 0
+var bool bosBullHeld = false
+var int  bosBearBar  = 0
+var bool bosBearHeld = false
+var float _idmLL  = na
+var float _idmLS = na
+var bool  _idmSL  = false
+var bool  _idmSS = false
+var int   _idmBL    = 0
+var int   _idmBS   = 0
+var int   _swBB  = -999
+var int   _swBrB  = -999
+if bullBOS
+    bosBullBar  := bar_index
+    bosBullHeld := false
+if not bosBullHeld and bar_index - bosBullBar >= 2 and close > lastHH
+    lastLL      := na
+    bosBullHeld := true
+if bearBOS
+    bosBearBar  := bar_index
+    bosBearHeld := false
+if not bosBearHeld and bar_index - bosBearBar >= 2 and close < lastLL
+    lastHH      := na
+    bosBearHeld := true
+
+if bullBOS or bullMSS
+    _idmLL  := not na(lastHL) ? lastHL : ta.lowest(low, swingLen)
+    _idmSL  := false
+    _idmBL    := bar_index
+if bearBOS or bearMSS
+    _idmLS := not na(lastLH) ? lastLH : ta.highest(high, swingLen)
+    _idmSS := false
+    _idmBS   := bar_index
+if i_idmEnable and not na(_idmLL)  and not _idmSL  and low  <= _idmLL
+    _idmSL  := true
+if i_idmEnable and not na(_idmLS) and not _idmSS and high >= _idmLS
+    _idmSS := true
+_idmGL  = i_idmEnable and not _idmSL  and _idmBL  > 0 and (bar_index - _idmBL)  <= i_memLen
+_idmGS = i_idmEnable and not _idmSS and _idmBS > 0 and (bar_index - _idmBS) <= i_memLen
+if _bSWP
+    _swBB := bar_index
+if _brSWP
+    _swBrB := bar_index
+_mSwBu = (bar_index - _swBB) <= i_memLen
+_mSwBe = (bar_index - _swBrB) <= i_memLen
+if showStructLbls and bullBOS
+    label.new(bar_index, low,  "BOS",    yloc=yloc.belowbar, color=color.new(c_bull,20), textcolor=color.white, style=label.style_label_up,   size=size.tiny)
+if showStructLbls and bearBOS
+    label.new(bar_index, high, "BOS",    yloc=yloc.abovebar, color=color.new(c_bear,20), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+if showStructLbls and bullMSS
+    label.new(bar_index, low,  "MSS ↑", yloc=yloc.belowbar, color=c_bull, textcolor=color.white, style=label.style_label_up,   size=size.small)
+if showStructLbls and bearMSS
+    label.new(bar_index, high, "MSS ↓", yloc=yloc.abovebar, color=c_bear, textcolor=color.white, style=label.style_label_down, size=size.small)
+if showStructLbls and _bSWP
+    label.new(bar_index, low,  "SWP↑", yloc=yloc.belowbar, color=color.new(c_orange,20), textcolor=color.white, style=label.style_label_up,   size=size.tiny)
+if showStructLbls and _brSWP
+    label.new(bar_index, high, "SWP↓", yloc=yloc.abovebar, color=color.new(c_orange,20), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+if label.all.size() > 298
+    label.delete(label.all.get(0))
+var ob_bull_top   = array.new_float(0)
+var ob_bull_bot   = array.new_float(0)
+var ob_bear_top   = array.new_float(0)
+var ob_bear_bot   = array.new_float(0)
+var ob_bull_boxes = array.new_box(0)
+var ob_bear_boxes = array.new_box(0)
+var ob_bull_viol  = array.new_int(0)
+var ob_bear_viol  = array.new_int(0)
+if bullBOS and showOB and barstate.isconfirmed
+    int   _obBI = 1
+    float _obVol = 0.0
+    for i = 1 to lb * 2
+        if close[i] < open[i] and volume[i] > _obVol
+            _obVol := volume[i]
+            _obBI  := i
+    if _obVol > 0
+        array.unshift(ob_bull_top,  high[_obBI])
+        array.unshift(ob_bull_bot,  low[_obBI])
+        array.unshift(ob_bull_viol, 0)
+        b = box.new(bar_index-_obBI, high[_obBI], bar_index+obExtend, low[_obBI], border_color=color.new(c_bull,40), border_width=1, bgcolor=c_bull_f)
+        array.unshift(ob_bull_boxes, b)
+        if array.size(ob_bull_boxes) > obMaxCount
+            box.delete(array.pop(ob_bull_boxes))
+            array.pop(ob_bull_top)
+            array.pop(ob_bull_bot)
+            array.pop(ob_bull_viol)
+if bearBOS and showOB and barstate.isconfirmed
+    int   _obBIb = 1
+    float _obVolb = 0.0
+    for i = 1 to lb * 2
+        if close[i] > open[i] and volume[i] > _obVolb
+            _obVolb := volume[i]
+            _obBIb  := i
+    if _obVolb > 0
+        array.unshift(ob_bear_top,  high[_obBIb])
+        array.unshift(ob_bear_bot,  low[_obBIb])
+        array.unshift(ob_bear_viol, 0)
+        b = box.new(bar_index-_obBIb, high[_obBIb], bar_index+obExtend, low[_obBIb], border_color=color.new(c_bear,40), border_width=1, bgcolor=c_bear_f)
+        array.unshift(ob_bear_boxes, b)
+        if array.size(ob_bear_boxes) > obMaxCount
+            box.delete(array.pop(ob_bear_boxes))
+            array.pop(ob_bear_top)
+            array.pop(ob_bear_bot)
+            array.pop(ob_bear_viol)
+if array.size(ob_bull_boxes) > 0
+    for i = array.size(ob_bull_boxes) - 1 to 0
+        if close < array.get(ob_bull_bot, i)
+            _v = array.get(ob_bull_viol, i) + 1
+            array.set(ob_bull_viol, i, _v)
+            if obMitigated and _v >= 2
+                box.delete(array.get(ob_bull_boxes, i))
+                array.remove(ob_bull_boxes, i)
+                array.remove(ob_bull_top,   i)
+                array.remove(ob_bull_bot,   i)
+                array.remove(ob_bull_viol,  i)
+        else
+            array.set(ob_bull_viol, i, 0)
+if array.size(ob_bear_boxes) > 0
+    for i = array.size(ob_bear_boxes) - 1 to 0
+        if close > array.get(ob_bear_top, i)
+            _v = array.get(ob_bear_viol, i) + 1
+            array.set(ob_bear_viol, i, _v)
+            if obMitigated and _v >= 2
+                box.delete(array.get(ob_bear_boxes, i))
+                array.remove(ob_bear_boxes, i)
+                array.remove(ob_bear_top,   i)
+                array.remove(ob_bear_bot,   i)
+                array.remove(ob_bear_viol,  i)
+        else
+            array.set(ob_bear_viol, i, 0)
+inBullOB = false
+inBearOB = false
+if array.size(ob_bull_top) > 0
+    for i = 0 to array.size(ob_bull_top) - 1
+        if close >= array.get(ob_bull_bot, i) and close <= array.get(ob_bull_top, i)
+            inBullOB := true
+if array.size(ob_bear_top) > 0
+    for i = 0 to array.size(ob_bear_top) - 1
+        if close >= array.get(ob_bear_bot, i) and close <= array.get(ob_bear_top, i)
+            inBearOB := true
+bullBOSConfirmed := _bBOSV[1] and not na(lastHH[1]) and close > lastHH[1]
+bearBOSConfirmed := _brBOSV[1] and not na(lastLL[1]) and close < lastLL[1]
+bullBOSFailed    := bullBOS[1] and not na(lastHH[1]) and close < lastHH[1]
+bearBOSFailed    := bearBOS[1] and not na(lastLL[1]) and close > lastLL[1]
+bullEngulf      = close > high[1] and open <= close[1] and isBull and (close - open) > atr * 0.5
+bearEngulf      = close < low[1]  and open >= close[1] and isBear and (open - close) > atr * 0.5
+engulfAtBullOB  = bullEngulf and inBullOB and isInstVol
+engulfAtBearOB  = bearEngulf and inBearOB and isInstVol
+slLongLev  = close - atr * slMult
+slShortLev = close + atr * slMult
+plot(showSL and (bullMSS or bullBOS) ? slLongLev  : na, "SL Long",  color=color.new(c_bear,40), linewidth=1, style=plot.style_circles, display=display.pane)
+plot(showSL and (bearMSS or bearBOS) ? slShortLev : na, "SL Short", color=color.new(c_bear,40), linewidth=1, style=plot.style_circles, display=display.pane)
+isFVGBull = (low - high[2]) > atr * fvgMinSize and low > high[2]
+isFVGBear = (low[2] - high) > atr * fvgMinSize and high < low[2]
+if showFVG and isFVGBull
+    box.new(bar_index-2, low, bar_index+obExtend, high[2], border_color=color.new(c_bull,50), border_width=1, bgcolor=color.new(#00C076,90))
+if showFVG and isFVGBear
+    box.new(bar_index-2, low[2], bar_index+obExtend, high, border_color=color.new(c_bear,50), border_width=1, bgcolor=color.new(#FF3B3B,90))
+var float nFVGBull = na
+var float nFVGBear = na
+if isFVGBull
+    nFVGBull := (low + high[2]) / 2
+if isFVGBear
+    nFVGBear := (low[2] + high) / 2
+
+asianKZ  = time(timeframe.period, "0200-0500:23456", "America/New_York")
+londonKZ = time(timeframe.period, "0300-0500:23456", "America/New_York")
+nyKZ     = time(timeframe.period, "0930-1100:23456", "America/New_York")
+nyPMKZ   = time(timeframe.period, "1400-1600:23456", "America/New_York")
+indiaKZ  = time(timeframe.period, "0915-1530:23456", "Asia/Kolkata")
+inAsian  = showKZ and kzAsian  and not na(asianKZ)
+inLondon = showKZ and kzLondon and not na(londonKZ)
+inNY     = showKZ and kzNY     and not na(nyKZ)
+inNYPM   = showKZ and kzNYPM   and not na(nyPMKZ)
+inIndia  = showKZ and kzIndia  and not na(indiaKZ)
+inAnyKZ  = inAsian or inLondon or inNY or inNYPM or inIndia
+bgcolor(inNY     ? color.new(#00C076,96) : na, title="NY KZ")
+bgcolor(inLondon ? color.new(#4488FF,96) : na, title="London KZ")
+bgcolor(inAsian  ? color.new(#9B59B6,96) : na, title="Asian KZ")
+bgcolor(inNYPM   ? color.new(#FFD700,96) : na, title="NY PM KZ")
+bgcolor(inIndia  ? color.new(#FF9933,94) : na, title="India NSE KZ")
+cmpFastE  = ta.ema(close, i_cmpFast)
+cmpMidE   = ta.ema(close, i_cmpMid)
+cmpSlowE  = ta.ema(close, i_cmpSlow)
+cmpFan    = atr > 0 ? (cmpFastE - cmpSlowE) / atr : 0.0
+cmpPhaseExpanding   = cmpFastE > cmpMidE and cmpMidE > cmpSlowE and cmpFan > cmpFan[3]
+cmpPhaseTurning     = ta.crossover(cmpFastE, cmpMidE) or ta.crossunder(cmpFastE, cmpMidE)
+cmpBullPhase        = cmpFastE > cmpMidE
+cmpBearPhase        = cmpFastE < cmpMidE
+cmpBullBonus = i_cmpEnable ? (cmpBullPhase ? (cmpPhaseExpanding ? 7 : 4) : cmpBearPhase ? -3 : 0) : 0
+cmpBearBonus = i_cmpEnable ? (cmpBearPhase ? (cmpPhaseExpanding ? 7 : 4) : cmpBullPhase ? -3 : 0) : 0
+vcoATRShort   = ta.atr(i_vcoATRShort)
+vcoATRLong    = ta.atr(i_vcoATRLong)
+vcoCompress   = vcoATRLong > 0 ? vcoATRShort / vcoATRLong : 1.0
+float compressInv = 1.0 - vcoCompress
+float compressPercentile = ta.percentrank(compressInv, math.min(50, bar_index + 1))
+vcoBullPress  = math.sum(close > open ? volume : 0, i_vcoPressLen)
+vcoBearPress  = math.sum(close < open ? volume : 0, i_vcoPressLen)
+vcoTotalPress = vcoBullPress + vcoBearPress
+vcoDirBias    = vcoTotalPress > 0 ? math.abs(vcoBullPress - vcoBearPress) / vcoTotalPress : 0.0
+
+vcoScore      = i_vcoEnable ? compressPercentile * 2.0 : 0.0
+vcoBreakout   = i_vcoEnable and compressPercentile >= 80 and vcoScore > i_vcoThresh
+vcoBullCoil   = vcoBreakout and vcoBullPress > vcoBearPress
+vcoBearCoil   = vcoBreakout and vcoBearPress > vcoBullPress
+_iofiRange    = math.max(high - low, syminfo.mintick)
+_iofiUpper    = high  - _iofiRange / 3.0
+_iofiLower    = low   + _iofiRange / 3.0
+_iofiUpperVol = volume * math.max(close - _iofiUpper, 0.0) / _iofiRange
+_iofiLowerVol = volume * math.max(_iofiLower - close, 0.0) / _iofiRange
+_iofiUpperMA  = ta.sma(_iofiUpperVol, i_iofiLen)
+_iofiLowerMA  = ta.sma(_iofiLowerVol, i_iofiLen)
+iofiBull      = i_iofiEnable and _iofiUpperVol > _iofiLowerVol * i_iofiImbal and _iofiUpperVol > _iofiUpperMA
+iofiBear      = i_iofiEnable and _iofiLowerVol > _iofiUpperVol * i_iofiImbal and _iofiLowerVol > _iofiLowerMA
+iofiNeutral   = not iofiBull and not iofiBear
+iofiBullPts   = iofiBull  ? 8 : iofiNeutral ? 0 : -3
+iofiBearPts   = iofiBear  ? 8 : iofiNeutral ? 0 : -3
+
+int BUCKETS = vpBuckets
+var float[]   vp_bucketVol = array.new_float(BUCKETS, 0.0)
+var float[]   vp_bucketHi  = array.new_float(BUCKETS, 0.0)
+var float[]   vp_bucketLo  = array.new_float(BUCKETS, 0.0)
+var matrix<float> vp_history = matrix.new<float>(vpLookback, 4, 0.0)
+var int       vp_writeIdx  = 0
+var int       vp_barsFilled = 0
+
+var float vp_poc = na
+var float vp_vah = na
+var float vp_val = na
+
+if barstate.isconfirmed or barstate.islast
+    matrix.set(vp_history, vp_writeIdx, 0, high)
+    matrix.set(vp_history, vp_writeIdx, 1, low)
+    matrix.set(vp_history, vp_writeIdx, 2, close)
+    matrix.set(vp_history, vp_writeIdx, 3, volume)
+    if barstate.isconfirmed
+        vp_writeIdx := (vp_writeIdx + 1) % vpLookback
+        vp_barsFilled := math.min(vp_barsFilled + 1, vpLookback)
+
+if vp_barsFilled >= 20
+    float _vpH = -1e10
+    float _vpL =  1e10
+    for i = 0 to vp_barsFilled - 1
+        float rowHigh = matrix.get(vp_history, i, 0)
+        float rowLow  = matrix.get(vp_history, i, 1)
+        _vpH := math.max(_vpH, rowHigh)
+        _vpL := math.min(_vpL, rowLow)
+    
+    float _vpR = _vpH - _vpL
+    if _vpR > syminfo.mintick
+        float _bs = _vpR / BUCKETS
+        array.fill(vp_bucketVol, 0.0)
+        for b = 0 to BUCKETS - 1
+            array.set(vp_bucketLo, b, _vpL + b * _bs)
+            array.set(vp_bucketHi, b, _vpL + (b + 1) * _bs)
+        
+        for i = 0 to vp_barsFilled - 1
+            float rowHigh = matrix.get(vp_history, i, 0)
+            float rowLow  = matrix.get(vp_history, i, 1)
+            float rowVol  = matrix.get(vp_history, i, 3)
+            float rowRange = rowHigh - rowLow
+            
+            for b = 0 to BUCKETS - 1
+                float _lo = array.get(vp_bucketLo, b)
+                float _hi = array.get(vp_bucketHi, b)
+                float overlapLow  = math.max(rowLow, _lo)
+                float overlapHigh = math.min(rowHigh, _hi)
+                if overlapHigh > overlapLow
+                    float frac = rowRange > 0 ? (overlapHigh - overlapLow) / rowRange : 1.0 / BUCKETS
+                    array.set(vp_bucketVol, b, array.get(vp_bucketVol, b) + rowVol * frac)
+        
+        float _maxVol = array.max(vp_bucketVol)
+        int   _pocIdx = 0
+        for b = 0 to BUCKETS - 1
+            if array.get(vp_bucketVol, b) >= _maxVol
+                _pocIdx := b
+                break
+        
+        vp_poc := _vpL + (_pocIdx + 0.5) * _bs
+        float _totalVol = array.sum(vp_bucketVol)
+        float _vaTarget = _totalVol * 0.70
+        float _vaAccum  = array.get(vp_bucketVol, _pocIdx)
+        int   _vaLow   = _pocIdx
+        int   _vaHigh  = _pocIdx
+        
+        while _vaAccum < _vaTarget and (_vaLow > 0 or _vaHigh < BUCKETS - 1)
+            float volLow  = _vaLow  > 0            ? array.get(vp_bucketVol, _vaLow  - 1) : -1.0
+            float volHigh = _vaHigh < BUCKETS - 1 ? array.get(vp_bucketVol, _vaHigh + 1) : -1.0
+            if volHigh >= volLow
+                _vaHigh += 1
+                _vaAccum += volHigh
+            else
+                _vaLow -= 1
+                _vaAccum += volLow
+        
+        vp_vah := _vpL + (_vaHigh + 1) * _bs
+        vp_val := _vpL + _vaLow        * _bs
+        
+        if barstate.islast and showVP
+            int _rE = bar_index + vpExtend
+            if showVA
+                box.new(bar_index, vp_vah, _rE, vp_val, border_color=color.new(#00BCD4,80), border_width=1, bgcolor=color.new(#00BCD4,92))
+            for b = 0 to BUCKETS - 1
+                float _bLo  = array.get(vp_bucketLo, b)
+                float _bHi  = array.get(vp_bucketHi, b)
+                float _bN   = _maxVol > 0 ? array.get(vp_bucketVol, b) / _maxVol : 0.0
+                int   _bW   = int(math.max(1, math.round(_bN * vpBarWidth * 10)))
+                bool  _isP  = b == _pocIdx
+                bool  _isVA = b >= _vaLow and b <= _vaHigh
+                color _col  = _isP ? color.new(#FFD700,20) : _bN >= 0.75 ? color.new(#00C076,55) : _bN <= 0.25 ? color.new(#FF3B3B,75) : _isVA ? color.new(#00BCD4,70) : color.new(#888888,75)
+                box.new(bar_index, _bHi, bar_index + _bW, _bLo, border_color=color.new(#000000,100), border_width=0, bgcolor=_col)
+            if showPOC
+                line.new(bar_index - vpLookback, vp_poc, _rE, vp_poc, color=color.new(#FFD700,0), width=2, style=line.style_dashed)
+                label.new(_rE, vp_poc, "POC", color=color.new(#FFD700,10), textcolor=color.black, style=label.style_label_left, size=size.tiny)
+            if showVA
+                label.new(_rE, vp_vah, "VAH", color=color.new(#00BCD4,20), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                label.new(_rE, vp_val, "VAL", color=color.new(#00BCD4,20), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+nearPOC     = not na(vp_poc) and math.abs(close - vp_poc) <= atr * 0.5
+aboveVAH    = not na(vp_vah) and close > vp_vah
+belowVAL    = not na(vp_val) and close < vp_val
+inValueArea = not na(vp_vah) and not na(vp_val) and close <= vp_vah and close >= vp_val
+nearVAL     = not na(vp_val) and math.abs(close - vp_val) <= atr * 0.5
+nearVAH     = not na(vp_vah) and math.abs(close - vp_vah) <= atr * 0.5
+isDiscount  = belowVAL or (inValueArea and close < vp_poc)
+isPremium   = aboveVAH or (inValueArea and close > vp_poc)
+cSz        = high - low + syminfo.mintick
+bSz        = math.abs(close - open)
+bRatio     = bSz / cSz
+cHigh_inst = close >= (low  + cSz * 0.6)
+cLow_inst  = close <= (high - cSz * 0.6)
+rawInstBuy  = isInstVol and bRatio >= 0.6 and cHigh_inst and isBull
+rawInstSell = isInstVol and bRatio >= 0.6 and cLow_inst  and isBear
+huntAccBull = isHuntBull and isInstVol and isBull
+huntAccBear = isHuntBear and isInstVol and isBear
+if showInstVolLbl and rawInstBuy
+    label.new(bar_index, low,  "🏦 " + str.tostring(math.round(volRatio*10)/10) + "×", yloc=yloc.belowbar, color=color.new(c_bull,10), textcolor=color.white, style=label.style_label_up,   size=size.tiny)
+if showInstVolLbl and rawInstSell
+    label.new(bar_index, high, "🏦 " + str.tostring(math.round(volRatio*10)/10) + "×", yloc=yloc.abovebar, color=color.new(c_bear,10), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+barcolor(
+  not enableCandleColors ? na :
+  wySpring         and cc_wySpringOn    ? cc_wySpring    :
+  wySOS            and cc_wySOSOn       ? cc_wySOS       :
+  wySOW            and cc_wySOWOn       ? cc_wySOW       :
+  exhaustBull      and cc_exhaustBullOn ? cc_exhaustBull :
+  exhaustBear      and cc_exhaustBearOn ? cc_exhaustBear :
+  isHuntBull       and cc_huntBullOn    ? cc_huntBull    :
+  isHuntBear       and cc_huntBearOn    ? cc_huntBear    :
+  vsaSellingClimax and cc_vsaSCOn       ? cc_vsaSC       :
+  vsaBuyingClimax  and cc_vsaBCOn       ? cc_vsaBC       :
+  vsaNoDemand      and cc_vsaNDOn       ? cc_vsaND       :
+  vsaNoSupply      and cc_vsaNSOn       ? cc_vsaNS       :
+  showLowLiq and isLowLiq and cc_lowLiqOn ? cc_lowLiq    : na)
+plotshape(showExhaust and exhaustBull, title="Exhaust Bull", style=shape.xcross, location=location.belowbar, color=color.new(c_teal,20), size=size.tiny)
+plotshape(showExhaust and exhaustBear, title="Exhaust Bear", style=shape.xcross, location=location.abovebar, color=color.new(c_pink,20), size=size.tiny)
+if enableCandleColors and barstate.isconfirmed
+    if showWyckoff and wySpringValid and cc_wySpringOn
+        label.new(bar_index, low, "⚡ SPRING",
+             yloc=yloc.belowbar, color=color.new(#BB86FC, 10),
+             textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showWyckoff and wySOSValid and cc_wySOSOn
+        label.new(bar_index, high, "✅ SOS",
+             yloc=yloc.abovebar, color=color.new(#00FF88, 20),
+             textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showWyckoff and wySOWValid and cc_wySOWOn
+        label.new(bar_index, low, "⚠ SOW",
+             yloc=yloc.belowbar, color=color.new(#FF2952, 20),
+             textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showWyckoff and wyUTValid and cc_wySOWOn
+        label.new(bar_index, high, "🔴 UT",
+             yloc=yloc.abovebar, color=color.new(#FF2952, 30),
+             textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showVSA and vsaSellingClimax and cc_vsaSCOn
+        label.new(bar_index, low, "SC 🔴",
+             yloc=yloc.belowbar, color=color.new(#FF3B3B, 10),
+             textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showVSA and vsaBuyingClimax and cc_vsaBCOn
+        label.new(bar_index, high, "BC 🟢",
+             yloc=yloc.abovebar, color=color.new(#00C076, 10),
+             textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showVSA and vsaNoDemand and cc_vsaNDOn
+        label.new(bar_index, high, "ND 🟠",
+             yloc=yloc.abovebar, color=color.new(#FF6B00, 20),
+             textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showVSA and vsaNoSupply and cc_vsaNSOn
+        label.new(bar_index, low, "NS 🔵",
+             yloc=yloc.belowbar, color=color.new(#4488FF, 20),
+             textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showHuntTarget and isHuntBull and cc_huntBullOn
+        label.new(bar_index, low, "🎯 Bull Hunt",
+             yloc=yloc.belowbar, color=color.new(#FF6B00, 20),
+             textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showHuntTarget and isHuntBear and cc_huntBearOn
+        label.new(bar_index, high, "🎯 Bear Hunt",
+             yloc=yloc.abovebar, color=color.new(#FF6B00, 20),
+             textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showExhaust and exhaustBull and cc_exhaustBullOn
+        label.new(bar_index, low, "↩ Rev UP",
+             yloc=yloc.belowbar, color=color.new(#00BCD4, 20),
+             textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showExhaust and exhaustBear and cc_exhaustBearOn
+        label.new(bar_index, high, "↩ Rev DOWN",
+             yloc=yloc.abovebar, color=color.new(#FF69B4, 20),
+             textcolor=color.white, style=label.style_label_down, size=size.tiny)
+_regLen      = i_dynEnable ? i_regimeLen : 20
+_priceRange  = ta.highest(high, _regLen) - ta.lowest(low, _regLen)
+_atrMult20   = atr * _regLen
+_rangeRatio  = _atrMult20 > 0 ? _priceRange / _atrMult20 : 1.0
+_netMove     = math.abs(close - close[_regLen])
+_dirEffic    = _priceRange > 0 ? _netMove / _priceRange : 0.0
+_volTrend    = ta.sma(volume, _regLen) / math.max(ta.sma(volume, _regLen * 3), 1.0)
+_adxTrend    = adxVal >= adxMinEff
+_recentRange = ta.sma(high - low, _regLen)
+_thisRange   = high - low
+_breakoutBar = _thisRange > _recentRange * 2.0 and isInstVol
+_dirEfficRank  = ta.percentrank(_dirEffic,  100)
+_rangeRank     = ta.percentrank(_rangeRatio, 100)
+_adxRank       = ta.percentrank(adxVal,      100)
+_trendScore    = _adxRank * 0.40 + _dirEfficRank * 0.35 + _rangeRank * 0.25
+_chopScore     = (100 - _dirEfficRank) * 0.50 + (100 - _rangeRank) * 0.50
+string _rawRegime = "Ranging"
+if _breakoutBar
+    _rawRegime := "Breakout"
+else if _trendScore > 65
+    _rawRegime := "Trending"
+else if _chopScore > 65
+    _rawRegime := "Choppy"
+else
+    _rawRegime := "Ranging"
+var string lastRawRegime   = "Ranging"
+var int    regimePersistCt = 0
+var string regime          = "Ranging"
+var color  regimeCol       = c_sub
+if _rawRegime == lastRawRegime
+    regimePersistCt := regimePersistCt + 1
+else
+    regimePersistCt := 1
+    lastRawRegime   := _rawRegime
+if regimePersistCt >= i_regimeMinBars
+    regime := _rawRegime
+adaptiveADXMin := adaptiveADXMin * 0.95 + (regime == "Trending" ? 18.0 : regime == "Breakout" ? 22.0 : regime == "Choppy" ? 25.0 : 20.0) * 0.05
+adxMinEff      := adaptiveADXMin
+regimeCol := regime == "Trending" ? c_bull : regime == "Breakout" ? c_gold : regime == "Choppy" ? c_bear : c_orange
+
+var int _rangeDurBars = 0
+_rangeDurBars := (regime == "Ranging" or regime == "Choppy") ? _rangeDurBars + 1 : 0
+float _atrVolFactor = atrRatio > 1.6 ? 0.55 : atrRatio > 1.3 ? 0.75 : atrRatio > 1.1 ? 0.90 : atrRatio < 0.65 ? 1.45 : atrRatio < 0.80 ? 1.25 : 1.0
+int adaptSwingLB = math.max(int(math.round(swingLen   * _atrVolFactor)), 3)
+int adaptShLBv   = math.max(int(math.round(shLookback * _atrVolFactor)), 3)
+int adaptVsaLBv  = math.max(int(math.round(vsaLookback * _atrVolFactor)), 10)
+int adaptVolMAv  = math.max(int(math.round(volMaLen   * _atrVolFactor)), 5)
+int adaptEHL     = regime == "Choppy" ? math.min(ehlLookback + _rangeDurBars / 3, 120) : regime == "Trending" ? math.max(ehlLookback - 10, 20) : ehlLookback
+
+float regime_t1Mult    = 1.0
+float regime_t2Mult    = 1.0
+float regime_t3Mult    = 1.0
+float regime_threshAdj = 0.0
+if i_dynEnable
+    if regime == "Trending"
+        regime_t1Mult    := 1.3
+        regime_t2Mult    := 0.9
+        regime_t3Mult    := 1.1
+        regime_threshAdj := -5.0
+    else if regime == "Ranging"
+        regime_t1Mult    := 0.9
+        regime_t2Mult    := 1.3
+        regime_t3Mult    := 1.0
+        regime_threshAdj := 0.0
+    else if regime == "Breakout"
+        regime_t1Mult    := 1.5
+        regime_t2Mult    := 0.8
+        regime_t3Mult    := 0.8
+        regime_threshAdj := -8.0
+    else
+        regime_t1Mult    := 0.7
+        regime_t2Mult    := 0.7
+        regime_t3Mult    := 0.7
+        regime_threshAdj := 15.0
+var int _mVSANS  = 999, var int _mVSAND = 999, var int _mVSAT  = 999
+var int _mVSAEff = 999, var int _mVSASC = 999, var int _mZBull = 999
+var int _mZBear  = 999, var int _mWySPR = 999, var int _mWySOS = 999
+var int _mWyUT   = 999, var int _mWySOW = 999, var int _mWySC  = 999
+var int _mCVDB   = 999, var int _mCVDBr = 999, var int _mBMSS  = 999
+var int _mBrMSS  = 999
+var int _mHuntB  = 999, var int _mHuntBr= 999
+var int _mGateL  = 999, var int _mGateS  = 999
+var int _mBullOB = 999, var int _mBearOB = 999
+var int _mIOFIB  = 999, var int _mIOFIBr = 999
+_mVSANS  := vsaNoSupply       ? 0 : math.min(_mVSANS  + 1, 999)
+_mVSAND  := vsaNoDemand       ? 0 : math.min(_mVSAND  + 1, 999)
+_mVSAT   := vsaTest           ? 0 : math.min(_mVSAT   + 1, 999)
+_mVSAEff := vsaEffortBear     ? 0 : math.min(_mVSAEff + 1, 999)
+_mVSASC  := vsaSellingClimax  ? 0 : math.min(_mVSASC  + 1, 999)
+_mZBull  := zDeltaBull        ? 0 : math.min(_mZBull  + 1, 999)
+_mZBear  := zDeltaBear        ? 0 : math.min(_mZBear  + 1, 999)
+_mWySPR  := wySpringConfirmed ? 0 : math.min(_mWySPR  + 1, 999)
+_mWySOS  := wySOS             ? 0 : math.min(_mWySOS  + 1, 999)
+_mWyUT   := wyUT              ? 0 : math.min(_mWyUT   + 1, 999)
+_mWySOW  := wySOW             ? 0 : math.min(_mWySOW  + 1, 999)
+_mWySC   := wySC              ? 0 : math.min(_mWySC   + 1, 999)
+_mCVDB   := cvdBullDiv        ? 0 : math.min(_mCVDB   + 1, 999)
+_mCVDBr  := cvdBearDiv        ? 0 : math.min(_mCVDBr  + 1, 999)
+_mBMSS   := bullMSS           ? 0 : math.min(_mBMSS   + 1, 999)
+_mBrMSS  := bearMSS           ? 0 : math.min(_mBrMSS  + 1, 999)
+_mGateL  := bullBOSConfirmed  ? 0 : math.min(_mGateL  + 1, 999)
+_mGateS  := bearBOSConfirmed  ? 0 : math.min(_mGateS  + 1, 999)
+_mBullOB := inBullOB          ? 0 : math.min(_mBullOB + 1, 999)
+_mBearOB := inBearOB          ? 0 : math.min(_mBearOB + 1, 999)
+_mIOFIB  := iofiBull          ? 0 : math.min(_mIOFIB  + 1, 999)
+_mIOFIBr := iofiBear          ? 0 : math.min(_mIOFIBr + 1, 999)
+mem_vsaNoSupply  = _mVSANS  <= i_memLen
+mem_vsaNoDemand  = _mVSAND  <= i_memLen
+mem_vsaTest      = _mVSAT   <= i_memLen
+mem_vsaEffort    = _mVSAEff <= i_memLen
+mem_vsaSC        = _mVSASC  <= i_memLen
+mem_zDeltaBull   = _mZBull  <= i_memLen
+mem_zDeltaBear   = _mZBear  <= i_memLen
+mem_wySpring     = _mWySPR  <= i_memLen
+mem_wySOS        = _mWySOS  <= i_memLen
+mem_wyUT         = _mWyUT   <= i_memLen
+mem_wySOW        = _mWySOW  <= i_memLen
+mem_wySC         = _mWySC   <= i_memLen
+mem_cvdBullDiv   = _mCVDB   <= i_memLen
+mem_cvdBearDiv   = _mCVDBr  <= i_memLen
+mem_bullMSS      = _mBMSS   <= i_memLen
+mem_bearMSS      = _mBrMSS  <= i_memLen
+mem_iofiBull     = _mIOFIB  <= i_memLen
+mem_iofiBear     = _mIOFIBr <= i_memLen
+var float fbBullAcc  = 0.6,  var float fbBearAcc  = 0.6
+var float fbWyAcc    = 0.6,  var float fbVSAAcc   = 0.6
+var float fbZAcc     = 0.6,  var float fbHuntAcc  = 0.6
+var float fbWyTrend    = 0.6,  var float fbWyRange    = 0.6
+var float fbScalpAcc   = 0.6,  var float fbEngulfAcc  = 0.6
+var float fbWyBreakout = 0.6,  var float fbWyChop     = 0.6
+var float fbVSATrend   = 0.6,  var float fbVSARange   = 0.6
+f_fbWeight(acc) => 0.5 + acc * 0.8
+float sess_wyMult    = 1.0
+float sess_vsaMult   = 1.0
+float sess_zMult     = 1.0
+float sess_huntMult  = 1.0
+float sess_vpMult    = 1.0
+float sess_obMult    = 1.0
+float sess_threshAdj = 0.0
+if i_dynEnable and i_dynEnable
+    if inIndia
+        sess_wyMult    := 1.3
+        sess_vsaMult   := 1.2
+        sess_zMult     := 1.2
+        sess_huntMult  := 1.1
+        sess_vpMult    := 1.1
+        sess_obMult    := 1.2
+        sess_threshAdj := -4.0
+    else if inAsian
+        sess_wyMult    := 0.7
+        sess_vsaMult   := 1.2
+        sess_zMult     := 0.6
+        sess_huntMult  := 0.6
+        sess_vpMult    := 1.3
+        sess_obMult    := 1.2
+        sess_threshAdj := 5.0
+    else if inLondon
+        sess_wyMult    := 1.4
+        sess_vsaMult   := 1.3
+        sess_zMult     := 1.0
+        sess_huntMult  := 1.1
+        sess_vpMult    := 1.0
+        sess_obMult    := 1.1
+        sess_threshAdj := -3.0
+    else if inNY
+        sess_wyMult    := 1.0
+        sess_vsaMult   := 1.0
+        sess_zMult     := 1.4
+        sess_huntMult  := 1.4
+        sess_vpMult    := 1.1
+        sess_obMult    := 1.0
+        sess_threshAdj := -5.0
+    else if inNYPM
+        sess_wyMult    := 0.8
+        sess_vsaMult   := 0.8
+        sess_zMult     := 0.8
+        sess_huntMult  := 0.7
+        sess_vpMult    := 0.9
+        sess_obMult    := 0.8
+        sess_threshAdj := 5.0
+    else
+        sess_wyMult    := 0.5
+        sess_vsaMult   := 0.5
+        sess_zMult     := 0.5
+        sess_huntMult  := 0.4
+        sess_vpMult    := 0.7
+        sess_obMult    := 0.6
+        sess_threshAdj := 12.0
+fb_wyMult   = i_dynEnable and i_feedbackEnable ? f_fbWeight(fbWyAcc)   : 1.0
+fb_vsaMult  = i_dynEnable and i_feedbackEnable ? f_fbWeight(fbVSAAcc)  : 1.0
+fb_zMult    = i_dynEnable and i_feedbackEnable ? f_fbWeight(fbZAcc)    : 1.0
+fb_huntMult = i_dynEnable and i_feedbackEnable ? f_fbWeight(fbHuntAcc) : 1.0
+_wyFinalMult   = sess_wyMult   * fb_wyMult   * regime_t1Mult
+_vsaFinalMult  = sess_vsaMult  * fb_vsaMult  * regime_t1Mult
+_zFinalMult    = sess_zMult    * fb_zMult    * regime_t1Mult
+_huntFinalMult = sess_huntMult * fb_huntMult * regime_t1Mult
+_obFinalMult   = sess_obMult   * regime_t2Mult
+_vpFinalMult   = sess_vpMult   * regime_t2Mult
+longGateOpen  = (not vsaNoDemand) and (not aboveVAH) and (not wySOW) and (not wyUT)  and not divBlockLong
+shortGateOpen = (not vsaNoSupply) and (not belowVAL) and (not wySpring) and (not wySOS) and not divBlockShrt
+vsaGateLong  = not vsaNoDemand
+vsaGateShort = not vsaNoSupply
+vpGateLong   = not aboveVAH
+vpGateShort  = not belowVAL
+wyGateLong   = not wySOW and not wyUT
+wyGateShort  = not wySpring and not wySOS
+nearPDH = math.abs(close - nz(pdh, close)) <= pdAtrMult * atr
+nearPDL = math.abs(close - nz(pdl, close)) <= pdAtrMult * atr
+var float huntTargetAbove = na
+var float huntTargetBelow = na
+huntTargetAbove := not na(eqHLv) ? eqHLv : not na(pdh) ? pdh : wyHigh
+huntTargetBelow := not na(eqLLv) ? eqLLv : not na(pdl) ? pdl : wyLow
+huntTargetAboveNear = not na(huntTargetAbove) and (huntTargetAbove - close) <= atr * 1.5 and (huntTargetAbove - close) > 0
+huntTargetBelowNear = not na(huntTargetBelow) and (close - huntTargetBelow) <= atr * 1.5 and (close - huntTargetBelow) > 0
+bool isBuildUpBull = eqLowZone  or nearPDL
+bool isBuildUpBear = eqHighZone or nearPDH
+var int barsNearBullLevel = 0
+var int barsNearBearLevel = 0
+if isBuildUpBull
+    barsNearBullLevel := barsNearBullLevel + 1
+else
+    barsNearBullLevel := 0
+if isBuildUpBear
+    barsNearBearLevel := barsNearBearLevel + 1
+else
+    barsNearBearLevel := 0
+var bool huntBullConsumed = false
+var bool huntBearConsumed = false
+if not na(eqLLv) and close < eqLLv - atr * 0.3 and isHighV
+    huntBullConsumed := true
+if not na(eqLLv) and close > eqLLv + atr * 0.3
+    huntBullConsumed := false
+if not na(eqHLv) and close > eqHLv + atr * 0.3 and isHighV
+    huntBearConsumed := true
+if not na(eqHLv) and close < eqHLv - atr * 0.3
+    huntBearConsumed := false
+buildUpBullActive = isBuildUpBull and barsNearBullLevel <= 20 and not huntBullConsumed
+buildUpBearActive = isBuildUpBear and barsNearBearLevel <= 20 and not huntBearConsumed
+bool expectBullHunt = isBuildUpBull and (str.contains(wyPhase,"ST") or wySC)
+bool expectBearHunt = isBuildUpBear and (str.contains(wyPhase,"ST") or wyPS)
+bool preHuntClueBull_vsaZ  = (vsaNoSupply or vsaTest) and zDeltaBull
+bool preHuntClueBull_vsaD  = (vsaNoSupply or vsaTest) and (bullDiv or absorptionBull)
+bool preHuntClueBull_zD    = zDeltaBull and (bullDiv or absorptionBull)
+bool preHuntClueBull = preHuntClueBull_vsaZ or preHuntClueBull_vsaD or preHuntClueBull_zD
+bool preHuntClueBear_vsaZ  = vsaNoDemand and zDeltaBear
+bool preHuntClueBear_vsaD  = vsaNoDemand and (bearDiv or absorptionBear)
+bool preHuntClueBear_zD    = zDeltaBear  and (bearDiv or absorptionBear)
+bool preHuntClueBear = preHuntClueBear_vsaZ or preHuntClueBear_vsaD or preHuntClueBear_zD
+bool huntConfirmedBull = isHuntBull[1] and isInstVol[1]
+bool huntConfirmedBear = isHuntBear[1] and isInstVol[1]
+bool entryTriggerBull = huntConfirmedBull and (vsaTest or vsaNoSupply)
+bool entryTriggerBear = huntConfirmedBear and vsaNoDemand
+bool springRecent = wySpring or wySpring[1] or wySpring[2] or wySpring[3]
+bool utRecent     = wyUT     or wyUT[1]     or wyUT[2]     or wyUT[3]
+
+bool isTrapLong  = springRecent and vsaNoDemand
+
+bool isTrapShort = utRecent and vsaNoSupply  
+huntStage1Bull = buildUpBullActive and not vcoBreakout
+huntStage1Bear = buildUpBearActive and not vcoBreakout
+huntStage2Bull = buildUpBullActive and vcoCompress < 0.75 and volRatio < 0.85
+huntStage2Bear = buildUpBearActive and vcoCompress < 0.75 and volRatio < 0.85
+huntStage3Bull = huntStage2Bull and preHuntClueBull
+huntStage3Bear = huntStage2Bear and preHuntClueBear
+huntStage4Bull = isHuntBull and isInstVol and cmpPhaseTurning
+huntStage4Bear = isHuntBear and isInstVol and cmpPhaseTurning
+huntStage5Bull = entryTriggerBull
+huntStage5Bear = entryTriggerBear
+huntChainStageBull = huntStage5Bull ? 5 : huntStage4Bull ? 4 : huntStage3Bull ? 3 : huntStage2Bull ? 2 : huntStage1Bull ? 1 : 0
+huntChainStageBear = huntStage5Bear ? 5 : huntStage4Bear ? 4 : huntStage3Bear ? 3 : huntStage2Bear ? 2 : huntStage1Bear ? 1 : 0
+huntChainConfBull = huntChainStageBull == 5 ? math.round(fbHuntAcc * 100) : huntChainStageBull == 4 ? 75 : huntChainStageBull == 3 ? 55 : huntChainStageBull == 2 ? 35 : huntChainStageBull == 1 ? 20 : 0
+huntChainConfBear = huntChainStageBear == 5 ? math.round(fbHuntAcc * 100) : huntChainStageBear == 4 ? 75 : huntChainStageBear == 3 ? 55 : huntChainStageBear == 2 ? 35 : huntChainStageBear == 1 ? 20 : 0
+huntChainPtsBull = huntChainStageBull == 5 ? 15 : huntChainStageBull == 4 ? 10 : huntChainStageBull == 3 ? 6 : huntChainStageBull == 2 ? 3 : 0
+huntChainPtsBear = huntChainStageBear == 5 ? 15 : huntChainStageBear == 4 ? 10 : huntChainStageBear == 3 ? 6 : huntChainStageBear == 2 ? 3 : 0
+string huntStageStr = "Searching..."
+color  stageCol     = c_sub
+if isTrapLong or isTrapShort
+    huntStageStr := "⚠ TRAP — WAIT"
+    stageCol     := c_orange
+else if huntChainStageBull == 5 or huntChainStageBear == 5
+    huntStageStr := "✅ S5 ENTRY " + str.tostring(math.max(huntChainConfBull, huntChainConfBear)) + "%"
+    stageCol     := c_bull
+else if huntChainStageBull == 4 or huntChainStageBear == 4
+    huntStageStr := "🔥 S4 HUNT 75%"
+    stageCol     := c_gold
+else if huntChainStageBull == 3 or huntChainStageBear == 3
+    huntStageStr := "👀 S3 CLUES 55%"
+    stageCol     := c_teal
+else if huntChainStageBull == 2 or huntChainStageBear == 2
+    huntStageStr := "⏳ S2 BUILDUP 35%"
+    stageCol     := c_pink
+else if huntChainStageBull == 1 or huntChainStageBear == 1
+    huntStageStr := "🧲 S1 LIQ 20%"
+    stageCol     := c_wy
+huntBGcol = isTrapLong or isTrapShort ? color.new(c_orange, 88) : huntChainStageBull == 5 ? color.new(c_bull, 88) : huntChainStageBear == 5 ? color.new(c_bear, 88) : huntChainStageBull == 4 ? color.new(#FF6B00, 82) : huntChainStageBear == 4 ? color.new(#FF6B00, 82) : buildUpBullActive ? color.new(color.green, 92) : buildUpBearActive ? color.new(color.red, 92) : na
+bgcolor(showSHBG ? huntBGcol : na, title="Hunt BG")
+if barstate.islast and showHuntTarget
+    if huntTargetAboveNear and buildUpBearActive
+        line.new(bar_index-5, huntTargetAbove, bar_index+15, huntTargetAbove, color=color.new(color.red, 20), width=2, style=line.style_dotted)
+        label.new(bar_index+8, huntTargetAbove, "🎯 Bear S" + str.tostring(huntChainStageBear) + "\n" + str.tostring(math.round(huntTargetAbove*100)/100) + "\nConf: " + str.tostring(huntChainConfBear) + "%", color=color.new(color.red, 10), textcolor=color.white, style=label.style_label_left, size=size.small)
+    if huntTargetBelowNear and buildUpBullActive
+        line.new(bar_index-5, huntTargetBelow, bar_index+15, huntTargetBelow, color=color.new(color.green, 20), width=2, style=line.style_dotted)
+        label.new(bar_index+8, huntTargetBelow, "🎯 Bull S" + str.tostring(huntChainStageBull) + "\n" + str.tostring(math.round(huntTargetBelow*100)/100) + "\nConf: " + str.tostring(huntChainConfBull) + "%", color=color.new(color.green, 10), textcolor=color.white, style=label.style_label_left, size=size.small)
+f_get_tf_data() =>
+    _emaF  = ta.ema(close, emaF)
+    _emaS  = ta.ema(close, emaS)
+    _rsi   = ta.rsi(close, rsiL)
+    [_,_,_adx] = ta.dmi(adxL, adxL)
+    _vol   = volume
+    _vMA   = ta.sma(volume, vmaL)
+    _c     = close
+    _h     = high
+    _l     = low
+    _atr   = ta.atr(atrL)
+    _shH   = ta.highest(high[1], shLB)
+    _shL   = ta.lowest(low[1],   shLB)
+    _spMA  = ta.sma(high - low, vsaLookback)
+    _vAvg  = ta.sma(volume, vsaLookback)
+    _sp    = high - low
+    _cP    = _sp > 0 ? (close - low) / _sp : 0.5
+    _tUp   = _emaF > _emaS
+    _tDn   = _emaF < _emaS
+    _isBu  = close > open
+    _isBe  = close < open
+    _isNar = _sp < _spMA * vsaSpreadMult
+    _isWid = _sp > _spMA * vsaWideMult
+    _isLoV = volume < _vAvg * vsaLowVolMult
+    _isHiV = volume > _vAvg * vsaHighVolMult
+    _cH    = _cP >= 0.6
+    _cL    = _cP <= 0.4
+    _vND   = _isNar and _isLoV and not _cH and _tUp
+    _vNS   = _isNar and _isLoV and not _cL and _tDn
+    _vSC   = _isWid and _isHiV and _isBe and _cL
+    _vBC   = _isWid and _isHiV and _isBu and _cH
+    _vT    = _isNar and _isLoV and low < low[1] and close > low[1] and _tUp
+    _vEff  = _isWid and _isHiV and _isBe and (_cP > 0.4 and _cP < 0.6)
+    _vTH   = _isWid and _isHiV and _isBu and _cH and not _tUp
+    _vPOC  = ta.vwap(hlc3)
+    _vwStd = ta.stdev(close, vpLookback)
+    _vVAH  = _vPOC + _vwStd * 0.75
+    _vVAL  = _vPOC - _vwStd * 0.75
+    _vNearPOC = math.abs(close - _vPOC) <= _vwStd * 0.25
+    _bAmt  = close * bosBuffer / 100
+    _lHH   = ta.highest(high, lb * 4)
+    _lLL   = ta.lowest(low,   lb * 4)
+    _bBOS  = not na(_lHH) and close > _lHH + _bAmt and close[1] <= _lHH + _bAmt
+    _brBOS = not na(_lLL) and close < _lLL - _bAmt and close[1] >= _lLL - _bAmt
+    _lLH   = ta.pivothigh(high, lb, lb)
+    _lHL   = ta.pivotlow(low,   lb, lb)
+    _bMSS  = _tDn and not na(_lLH) and close > _lLH + _bAmt and close[1] <= _lLH + _bAmt
+    _brMSS = _tUp and not na(_lHL) and close < _lHL - _bAmt and close[1] >= _lHL - _bAmt
+    _cSz2  = high - low + syminfo.mintick
+    _bSz2  = math.abs(close - open)
+    _bR2   = _cSz2 > 0 ? _bSz2 / _cSz2 : 0.0
+    _vR2   = _vMA > 0 ? volume / _vMA : 1.0
+    _instV = _vR2 >= instVolMult
+    _iB    = _instV and _bR2 >= 0.6 and (close >= (low  + _cSz2 * 0.6)) and _isBu
+    _iS    = _instV and _bR2 >= 0.6 and (close <= (high - _cSz2 * 0.6)) and _isBe
+    _hB    = (math.min(open,close)-low) / math.max(high-low,syminfo.mintick) >= shWickRatio and low  < _shL and close > _shL
+    _hBr   = (high-math.max(open,close)) / math.max(high-low,syminfo.mintick) >= shWickRatio and high > _shH and close < _shH
+    _hAccB = _hB  and _instV and _isBu
+    _hAccBr= _hBr and _instV and _isBe
+    _wyVA  = ta.sma(volume, wyLB)
+    _wyH   = ta.highest(high, wyLB)
+    _wyL   = ta.lowest(low,   wyLB)
+    _wyHV  = volume > _wyVA * wyVolMult
+    _wyLV  = volume < _wyVA * 0.7
+    _wyWD  = (math.min(open,close)-low) / math.max(high-low,syminfo.mintick)
+    _wyWU  = (high-math.max(open,close)) / math.max(high-low,syminfo.mintick)
+    _wSC   = _isBe and _wyHV and _isWid and low <= _wyL*1.005 and _wyWD >= 0.3 and _tDn
+    _scR   = _wSC[1] or _wSC[2] or _wSC[3] or _wSC[4] or _wSC[5] or _wSC[6] or _wSC[7] or _wSC[8] or _wSC[9] or _wSC[10]
+    _wAR   = _isBu and not _wyHV and low <= _wyL*1.01 and _cH and _scR
+    _wST   = low <= _wyL*1.02 and low > _wyL*0.98 and _wyLV and not _isBe and not _wSC
+    _wSPR  = low < _wyL - _atr*wySpringTol and close > _wyL and _wyLV and _wyWD >= 0.5
+    _wARH  = ta.highest(high, math.min(wyLB, 30))
+    _wSOS  = _isBu and _wyHV and _isWid and close > _wARH*0.995 and _tDn
+    _wUT   = high > _wyH[1] and close < _wyH[1] and _wyHV and _wyWU >= 0.4
+    _wSOW  = _isBe and _wyHV and _isWid and _cL and _tUp
+    _wPS   = _tDn and _isBu and _wyHV and high >= _wyH*0.97 and close >= _wyH*0.95
+    _rng2  = math.max(high - low, syminfo.mintick)
+    _dOf   = volume * (2 * (close - low) / _rng2 - 1)
+    _dMean = ta.sma(_dOf, zDeltaLen)
+    _dStd  = ta.stdev(_dOf, zDeltaLen)
+    _zD    = _dStd > 0 ? (_dOf - _dMean) / _dStd : 0.0
+    [_emaF, _emaS, _rsi, _adx, _vol, _vMA, _c, _h, _l, _atr, _shH, _shL, _vND, _vNS, _vSC, _vBC, _vT, _vEff, _vTH, _bBOS, _brBOS, _bMSS, _brMSS, _iB, _iS, _hAccB, _hAccBr, _wSC, _wAR, _wST, _wSPR, _wSOS, _wUT, _wSOW, _wPS, _vPOC, _vVAH, _vVAL, _vNearPOC, _zD > zDeltaMin, _zD < -zDeltaMin]
+[tf1_emaF, tf1_emaS, tf1_rsi, tf1_adx, tf1_vol, tf1_volMA, tf1_c, tf1_h, tf1_l, tf1_atr, tf1_shH, tf1_shL, tf1_vND, tf1_vNS, tf1_vSC, tf1_vBC, tf1_vT, tf1_vEff, tf1_vTH, tf1_bBOS, tf1_brBOS, tf1_bMSS, tf1_brMSS, tf1_iB, tf1_iS, tf1_hAccB, tf1_hAccBr, tf1_wSC, tf1_wAR, tf1_wST, tf1_wSPR, tf1_wSOS, tf1_wUT, tf1_wSOW, tf1_wPS, tf1_vpPOC, tf1_vpVAH, tf1_vpVAL, tf1_vpNearPOC, tf1_zDB, tf1_zDBr] = request.security(syminfo.tickerid, tf1, f_get_tf_data(), lookahead=barmerge.lookahead_off)
+[tf2_emaF, tf2_emaS, tf2_rsi, tf2_adx, tf2_vol, tf2_volMA, tf2_c, tf2_h, tf2_l, tf2_atr, tf2_shH, tf2_shL, tf2_vND, tf2_vNS, tf2_vSC, tf2_vBC, tf2_vT, tf2_vEff, tf2_vTH, tf2_bBOS, tf2_brBOS, tf2_bMSS, tf2_brMSS, tf2_iB, tf2_iS, tf2_hAccB, tf2_hAccBr, tf2_wSC, tf2_wAR, tf2_wST, tf2_wSPR, tf2_wSOS, tf2_wUT, tf2_wSOW, tf2_wPS, tf2_vpPOC, tf2_vpVAH, tf2_vpVAL, tf2_vpNearPOC, tf2_zDB, tf2_zDBr] = request.security(syminfo.tickerid, tf2, f_get_tf_data(), lookahead=barmerge.lookahead_off)
+tf1_tUp  = tf1_emaF > tf1_emaS
+tf1_tDn  = tf1_emaF < tf1_emaS
+tf1_vR   = tf1_volMA > 0 ? tf1_vol / tf1_volMA : 1.0
+tf1_inst = tf1_vR >= instVolMult
+tf1_liq  = tf1_vR < lowLiqMult
+tf1_trnd = tf1_adx >= adxMinEff
+tf1_vsaGL= not tf1_vND
+tf1_vsaGS= not tf1_vNS
+tf2_tUp  = tf2_emaF > tf2_emaS
+tf2_tDn  = tf2_emaF < tf2_emaS
+tf2_vR   = tf2_volMA > 0 ? tf2_vol / tf2_volMA : 1.0
+tf2_inst = tf2_vR >= instVolMult
+tf2_liq  = tf2_vR < lowLiqMult
+tf2_trnd = tf2_adx >= adxMinEff
+tf2_vsaGL= not tf2_vND
+tf2_vsaGS= not tf2_vNS
+tf1_bs = (tf1_tUp?1:0)+(tf1_trnd?1:0)+(tf1_rsi>50?1:0)+(tf1_c<tf1_vpVAL?1:0)+(tf1_inst?1:0)+(tf1_hAccB?1:0)+(tf1_bMSS or tf1_bBOS?1:0)+(tf1_vTH or tf1_vNS?1:0)+(tf1_wSPR or tf1_wSOS?1:0)+(tf1_zDB?1:0)
+tf1_ss = (tf1_tDn?1:0)+(tf1_trnd?1:0)+(tf1_rsi<50?1:0)+(tf1_c>tf1_vpVAH?1:0)+(tf1_inst?1:0)+(tf1_hAccBr?1:0)+(tf1_brMSS or tf1_brBOS?1:0)+(tf1_vND or tf1_vBC?1:0)+(tf1_wUT or tf1_wSOW?1:0)+(tf1_zDBr?1:0)
+tf2_bs = (tf2_tUp?1:0)+(tf2_trnd?1:0)+(tf2_rsi>50?1:0)+(tf2_c<tf2_vpVAL?1:0)+(tf2_inst?1:0)+(tf2_hAccB?1:0)+(tf2_bMSS or tf2_bBOS?1:0)+(tf2_vTH or tf2_vNS?1:0)+(tf2_wSPR or tf2_wSOS?1:0)+(tf2_zDB?1:0)
+tf2_ss = (tf2_tDn?1:0)+(tf2_trnd?1:0)+(tf2_rsi<50?1:0)+(tf2_c>tf2_vpVAH?1:0)+(tf2_inst?1:0)+(tf2_hAccBr?1:0)+(tf2_brMSS or tf2_brBOS?1:0)+(tf2_vND or tf2_vBC?1:0)+(tf2_wUT or tf2_wSOW?1:0)+(tf2_zDBr?1:0)
+htfAlignLong  = tf1_tUp or tf2_tUp
+htfAlignShort = tf1_tDn or tf2_tDn
+var string tf1_wyPhase   = "─ None"
+var int    tf1_wySCbar   = 0
+var int    tf1_wyARbar   = 0
+var int    tf1_wySPRbar  = 0
+var int    tf1_wyUTbar   = 0
+var bool   tf1_wyAccum   = false
+var bool   tf1_wyDistrib = false
+var string tf2_wyPhase   = "─ None"
+var int    tf2_wySCbar   = 0
+var int    tf2_wyARbar   = 0
+var int    tf2_wySPRbar  = 0
+var int    tf2_wyUTbar   = 0
+var bool   tf2_wyAccum   = false
+var bool   tf2_wyDistrib = false
+if tf1_wSOW == true
+    tf1_wyPhase   := "🔴 Breakdown↓"
+    tf1_wyDistrib := true
+    tf1_wyAccum   := false
+else if tf1_wUT == true
+    tf1_wyPhase   := "🔴 False Brk↑"
+    tf1_wyUTbar   := bar_index
+else if tf1_wSOS == true
+    tf1_wyPhase   := "🟢 Breakout↑"
+    tf1_wyAccum   := true
+    tf1_wyDistrib := false
+else if tf1_wSPR == true
+    tf1_wyPhase   := "🟢 False Brk↓"
+    tf1_wySPRbar  := bar_index
+    tf1_wyAccum   := true
+    tf1_wyDistrib := false
+else if tf1_wPS == true
+    tf1_wyPhase   := "🔴 Supply↑"
+    tf1_wyDistrib := true
+    tf1_wyAccum   := false
+else if tf1_wST == true
+    tf1_wyPhase   := "🟡 Sellers dry"
+else if tf1_wAR == true
+    tf1_wyPhase   := "🟡 Bounce"
+    tf1_wyARbar   := bar_index
+else if tf1_wSC == true
+    tf1_wyPhase   := "🔴 Panic Sell"
+    tf1_wySCbar   := bar_index
+    tf1_wyAccum   := true
+    tf1_wyDistrib := false
+else
+    tf1_wyPhase   := "─ None"
+if tf2_wSOW == true
+    tf2_wyPhase   := "🔴 Breakdown↓"
+    tf2_wyDistrib := true
+    tf2_wyAccum   := false
+else if tf2_wUT == true
+    tf2_wyPhase   := "🔴 False Brk↑"
+    tf2_wyUTbar   := bar_index
+else if tf2_wSOS == true
+    tf2_wyPhase   := "🟢 Breakout↑"
+    tf2_wyAccum   := true
+    tf2_wyDistrib := false
+else if tf2_wSPR == true
+    tf2_wyPhase   := "🟢 False Brk↓"
+    tf2_wySPRbar  := bar_index
+    tf2_wyAccum   := true
+    tf2_wyDistrib := false
+else if tf2_wPS == true
+    tf2_wyPhase   := "🔴 Supply↑"
+    tf2_wyDistrib := true
+    tf2_wyAccum   := false
+else if tf2_wST == true
+    tf2_wyPhase   := "🟡 Sellers dry"
+else if tf2_wAR == true
+    tf2_wyPhase   := "🟡 Bounce"
+    tf2_wyARbar   := bar_index
+else if tf2_wSC == true
+    tf2_wyPhase   := "🔴 Panic Sell"
+    tf2_wySCbar   := bar_index
+    tf2_wyAccum   := true
+    tf2_wyDistrib := false
+else
+    tf2_wyPhase   := "─ None"
+
+ema20  = ta.ema(close, 20)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+float  _dominantEMA      = ema50
+string _dominantEMALabel = "50 EMA"
+if adxVal > 25 and regime == "Trending"
+    _dominantEMA      := ema20
+    _dominantEMALabel := "20 EMA"
+else if adxVal > 18 and regime == "Trending"
+    _dominantEMA      := ema50
+    _dominantEMALabel := "50 EMA"
+else if regime == "Ranging" or regime == "Breakout"
+    _dominantEMA      := ema20
+    _dominantEMALabel := "20 EMA"
+if i_mode == "Scalp"
+    _dominantEMA      := ema20
+    _dominantEMALabel := "20 EMA"
+else if i_mode == "Invest"
+    _dominantEMA      := ema200
+    _dominantEMALabel := "200 EMA"
+_distFromDomEMA   = atr > 0 ? math.abs(close - _dominantEMA) / atr : 0.0
+_distFromEMA50    = atr > 0 ? math.abs(close - ema50)        / atr : 0.0
+_nearDomEMA       = _distFromDomEMA < 0.3
+_stretchedFromEMA = _distFromDomEMA > 1.5
+_extremeStretch   = _distFromDomEMA > 2.5
+_emaAbove         = close < _dominantEMA
+_emaBelow         = close > _dominantEMA
+_tf1DomEMA    = tf1_tUp ? tf1_emaF : tf1_emaS
+_distTF1EMA   = tf1_atr > 0 ? math.abs(tf1_c - _tf1DomEMA) / tf1_atr : 0.0
+_tf1Stretched = _distTF1EMA > 1.5
+_tf1NearEMA   = _distTF1EMA < 0.3
+_multiTFEMAConf   = _nearDomEMA   and _tf1NearEMA
+_multiTFStretch   = _stretchedFromEMA and _tf1Stretched
+_priceROC5    = close[5] > 0 ? (close - close[5]) / close[5] * 100 : 0.0
+_normalROC5   = ta.sma(math.abs(close[5] > 0 ? (close - close[5]) / close[5] * 100 : 0.0), 20)
+isParabolic   = _priceROC5 > _normalROC5 * 2.5 and trendUp and volRatio > 1.2
+var bool _firstSpringFired = false
+var int  _firstSpringBar   = 0
+if wySpring and not _firstSpringFired
+    _firstSpringFired := true
+    _firstSpringBar   := bar_index
+if bar_index - _firstSpringBar > 40
+    _firstSpringFired := false
+secondShakeout = _firstSpringFired and isHuntBull and
+                 bar_index - _firstSpringBar > 2 and
+                 bar_index - _firstSpringBar <= 40
+var int _firstUTbar = 0
+if wyUT and _firstUTbar == 0
+    _firstUTbar := bar_index
+if bar_index - _firstUTbar > 60
+    _firstUTbar := 0
+utad = wyDistribActive and wyUT and _firstUTbar > 0 and
+       bar_index - _firstUTbar > 3
+_swingHigh20    = ta.highest(high[1], 20)
+_swingLow20     = ta.lowest(low[1],   20)
+_brokeAbove     = high > _swingHigh20
+_closedBackDown = close < _swingHigh20
+_brokeBelow     = low  < _swingLow20
+_closedBackUp   = close > _swingLow20
+bullTrap        = _brokeAbove and _closedBackDown and volRatio > 1.5
+bearTrap        = _brokeBelow and _closedBackUp
+bullTrapConf    = bullTrap[1]  and (vsaNoDemand or cvdBearDiv)
+bearTrapConf    = bearTrap[1]  and (vsaNoSupply or vsaTest or cvdBullDiv)
+_swingHigh10    = ta.highest(high[1], 10)
+_swingLow10     = ta.lowest(low[1],   10)
+_wickedAbove    = high > _swingHigh10 and (high - close) > (high - low) * 0.6
+_wickedBelow    = low  < _swingLow10  and (close - low)  > (high - low) * 0.6
+liqGrabBull     = _wickedBelow and zDeltaBull
+liqGrabBear     = _wickedAbove and zDeltaBear
+_trapRiskBull = (volRatio > 1.5 ? 25 : 0) +
+           (cvdBearDiv     ? 20 : 0) +
+           (tf1_tDn        ? 20 : 0) +
+           (wyDistribActive? 20 : 0) +
+           (isParabolic    ? 15 : 0)
+_trapRiskBear = (volRatio > 1.5 ? 25 : 0) +
+           (cvdBullDiv     ? 20 : 0) +
+           (tf1_tUp        ? 20 : 0) +
+           (wyAccumActive  ? 20 : 0) +
+           (_brokeBelow and wyAccumActive ? 15 : 0)
+_volROC3      = volume / math.max(ta.sma(volume[1], 3), 1)
+_isVolSpike   = _volROC3 > 3.0 and vcoCompress > 0.80
+_isVolBuild   = volRatio > instVolMult and _volROC3 < 2.0
+_fboRisk      = (vcoCompress > 0.80                    ? 25 : 0) +
+           (not wyAccumActive and not wyDistribActive ? 20 : 0) +
+           (_isVolSpike                            ? 20 : 0) +
+           (bullBOSFailed or bearBOSFailed         ? 25 : 0) +
+           ((tf1_tDn and bullBOS) or (tf1_tUp and bearBOS) ? 10 : 0)
+_fboWarnThresh = i_mode == "Scalp" ? 30 : i_mode == "Swing" ? 40 : 55
+_huntProbBase = (eqLowZone  ? 25 : nearPDL ? 15 : 0) +
+           (huntTargetBelowNear           ? 20 : 0) +
+           (huntStage2Bull                ? 15 : huntStage1Bull ? 8 : 0) +
+           (expectBullHunt                ? 15 : 0) +
+           (inAnyKZ                       ? 10 : 0) +
+           (preHuntClueBull               ?  7 : 0)
+_huntProbBull = i_mode == "Scalp" ? math.round(_huntProbBase * (inAnyKZ ? 1.2 : 0.8)) : i_mode == "Swing" ? math.round(_huntProbBase * (tf1_tDn ? 1.2 : 0.9)) : math.round(_huntProbBase * (_rangeDurBars > 30 ? 1.3 : 1.0))
+_huntProbBull := math.min(_huntProbBull, 95)
+_huntProbBaseB = (eqHighZone ? 25 : nearPDH ? 15 : 0) +
+               (huntTargetAboveNear          ? 20 : 0) +
+               (huntStage2Bear               ? 15 : huntStage1Bear ? 8 : 0) +
+               (expectBearHunt               ? 15 : 0) +
+               (inAnyKZ                      ? 10 : 0) +
+               (preHuntClueBear              ?  7 : 0)
+_huntProbBear = i_mode == "Scalp" ? math.round(_huntProbBaseB * (inAnyKZ ? 1.2 : 0.8)) : i_mode == "Swing" ? math.round(_huntProbBaseB * (tf1_tUp ? 1.2 : 0.9)) : math.round(_huntProbBaseB * (_rangeDurBars > 30 ? 1.3 : 1.0))
+_huntProbBear := math.min(_huntProbBear, 95)
+_effortVol    = volRatio
+var int _absorpBullBars = 0
+var int _absorpBearBars = 0
+_absorpBullBars := absorptionBull ? _absorpBullBars + 1 : 0
+_absorpBearBars := absorptionBear ? _absorpBearBars + 1 : 0
+_fbBreakScore = (_brokeAbove or _brokeBelow              ? 1 : 0) +
+           (vcoCompress > 0.80                      ? 1 : 0) +
+           (not wyAccumActive and not wyDistribActive? 1 : 0) +
+           (_isVolSpike                             ? 1 : 0) +
+           ((_brokeAbove and _closedBackDown) or
+               (_brokeBelow and _closedBackUp)         ? 2 : 0) +
+           ((tf1_tDn and _brokeAbove) or
+               (tf1_tUp and _brokeBelow)               ? 2 : 0)
+_investDistribSwingBull = wyDistribActive and trendUp and tf1_tUp
+_investAccumSwingBear   = wyAccumActive   and trendDown and tf1_tDn
+_tf2LeadsBull  = (tf2_wSPR or tf2_wSOS or tf2_zDB) and tf1_tUp
+_tf2LeadsBear  = (tf2_wUT  or tf2_wSOW or tf2_zDBr) and tf1_tDn
+_fullAlignBull = wyAccumActive and _tf2LeadsBull and (wySpringValid or wySOSValid)
+_fullAlignBear = wyDistribActive and _tf2LeadsBear and (wyUTValid or wySOWValid)
+_partAlignBull = wyAccumActive and tf1_tUp and not _tf2LeadsBull and (wySpringValid or wySOSValid)
+_partAlignBear = wyDistribActive and tf1_tDn and not _tf2LeadsBear and (wyUTValid or wySOWValid)
+_wasAbsorbingBull = absorptionBull[1] or absorptionBull[2] or absorptionBull[3]
+_wasAbsorbingBear = absorptionBear[1] or absorptionBear[2] or absorptionBear[3]
+_absorpToAggrBull = _wasAbsorbingBull and iofiBull and zDeltaBull and rawInstBuy and not absorptionBull
+_absorpToAggrBear = _wasAbsorbingBear and iofiBear and zDeltaBear and rawInstSell and not absorptionBear
+_tf1AgreesBull = tf1_tUp  or tf1_zDB  or tf1_hAccB
+_tf1AgreesBear = tf1_tDn  or tf1_zDBr or tf1_hAccBr
+_locUrgencyBull = eqLowZone ? 3 : nearPDL ? 3 : belowVAL ? 2 : inBullOB ? 2 : nearPOC ? 1 : 0
+_locUrgencyBear = eqHighZone ? 3 : nearPDH ? 3 : aboveVAH ? 2 : inBearOB ? 2 : nearPOC ? 1 : 0
+_locWeightStr = eqLowZone ? "EQL🎯" : eqHighZone ? "EQH🎯" : nearPDL ? "PDL🎯" : nearPDH ? "PDH🎯" : belowVAL ? "VAL🟢" : aboveVAH ? "VAH🔴" : inBullOB ? "BullOB" : inBearOB ? "BearOB" : nearPOC ? "POC📍" : "Mid"
+_locInvestStr = eqLowZone ? "Monthly EQL🎯" : eqHighZone ? "Monthly EQH🎯" : belowVAL ? "Weekly VAL zone" : aboveVAH ? "Weekly VAH zone" : nearPOC ? "Weekly POC📍" : "No macro level"
+var int _vpalBars = 0
+var int _vpahBars = 0
+_vpalBars := belowVAL or nearEQL ? _vpalBars + 1 : 0
+_vpahBars := aboveVAH or nearEQH ? _vpahBars + 1 : 0
+_vpZonePersist = (_vpalBars >= 3 and belowVAL) or (_vpahBars >= 3 and aboveVAH)
+_vpZonePersistStr = _vpalBars >= 3 ? "VAL×" + str.tostring(_vpalBars) + "b" : _vpahBars >= 3 ? "VAH×" + str.tostring(_vpahBars) + "b" : ""
+string _pipeQualStr = "❌ No seq"
+color  _pipeQualCol = c_sub
+if wyPipelineStage >= 5
+    _pipeQualStr := "✅ Full seq"
+    _pipeQualCol := c_bull
+else if wyPipelineStage >= 4
+    _pipeQualStr := "📋 4/5 seq"
+    _pipeQualCol := c_teal
+else if wyPipelineStage >= 3
+    _pipeQualStr := "⚠ 3/5 seq"
+    _pipeQualCol := c_orange
+else if wyPipelineStage >= 2
+    _pipeQualStr := "⚠ Partial"
+    _pipeQualCol := c_sub
+_springRangeSufficient = _rangeDurBars >= 15
+_springTooEarly        = wySpringValid and not _springRangeSufficient
+_fbLowReliability  = fbWyAcc < 0.50
+_fbMedReliability  = fbWyAcc >= 0.50 and fbWyAcc < 0.65
+_fbHighReliability = fbWyAcc >= 0.65
+string _fbActionVerb = "WATCH — low fb"
+if _fbHighReliability
+    _fbActionVerb := "POSITION"
+else if _fbMedReliability
+    _fbActionVerb := "HALF SIZE"
+_huntCoilingBull = (huntStage2Bull or huntStage3Bull) and _locUrgencyBull >= 2
+_huntCoilingBear = (huntStage2Bear or huntStage3Bear) and _locUrgencyBear >= 2
+if isHuntBull and not huntStage4Bull and not huntStage5Bull
+    huntStageStr := "🚨 SWEEPING↓ — watch close"
+    stageCol     := c_orange
+else if isHuntBear and not huntStage4Bear and not huntStage5Bear
+    huntStageStr := "🚨 SWEEPING↑ — watch close"
+    stageCol     := c_orange
+else if huntConfirmedBull and not entryTriggerBull
+    huntStageStr := "⏳ SWEPT↓ — awaiting test"
+    stageCol     := c_gold
+else if huntConfirmedBear and not entryTriggerBear
+    huntStageStr := "⏳ SWEPT↑ — awaiting test"
+    stageCol     := c_gold
+_sweepBar      = huntConfirmedBull or huntConfirmedBear ? bar_index : 0
+var int _lastSweepBar = 0
+if huntConfirmedBull or huntConfirmedBear
+    _lastSweepBar := bar_index
+_sweptBarsAgo  = _lastSweepBar > 0 ? bar_index - _lastSweepBar : -1
+_boHappeningBull = bullBOS or (_brokeAbove and not _closedBackDown)
+_boHappeningBear = bearBOS or (_brokeBelow and not _closedBackUp)
+_fboWarnBull     = _boHappeningBull and _fbBreakScore >= 3 and not wyAccumActive and not wySOSValid
+_fboWarnBear     = _boHappeningBear and _fbBreakScore >= 3 and not wyDistribActive and not wyUTValid
+_fboReasonBull   = vcoCompress > 0.80 ? "no compress" : tf1_tDn ? "HTF disagrees" : _isVolSpike ? "vol spike" : not wyAccumActive ? "no Wy context" : "suspicious"
+_fboReasonBear   = vcoCompress > 0.80 ? "no compress" : tf1_tUp ? "HTF disagrees" : _isVolSpike ? "vol spike" : not wyDistribActive ? "no Wy context" : "suspicious"
+_absorpBullLabel = _absorpBullBars >= 7 ? "🔵 Major load " + str.tostring(_absorpBullBars) + "b" : _absorpBullBars >= 4 ? "💧 Loading " + str.tostring(_absorpBullBars) + "b" : _absorpBullBars >= 2 ? "💧 Absorbing " + str.tostring(_absorpBullBars) + "b" : "💧 Absorb 1b"
+_absorpBearLabel = _absorpBearBars >= 7 ? "🔵 Major distrib " + str.tostring(_absorpBearBars) + "b" : _absorpBearBars >= 4 ? "📤 Distributing " + str.tostring(_absorpBearBars) + "b" : _absorpBearBars >= 2 ? "📤 Unloading " + str.tostring(_absorpBearBars) + "b" : "📤 Distrib 1b"
+_nsVolROCSpike   = _volROC3 > 4.0 and vcoCompress > 0.75
+_instVolLabel    = _isVolSpike ? "sudden×" + str.tostring(math.round(_volROC3 * 10) / 10) : _isVolBuild ? "building×" + str.tostring(math.round(volRatio * 10) / 10) : "×" + str.tostring(math.round(volRatio * 10) / 10)
+_volDryingTrend  = ta.sma(volume, 5) < ta.sma(volume, 20) * 0.80
+_priceTightening = (ta.highest(high, 10) - ta.lowest(low, 10)) < atr * 3.0
+
+bool _coilReady   = _volDryingTrend and _priceTightening and compressPercentile >= 70
+bool _coilMature  = _coilReady and compressPercentile >= 85
+bool _coilExtreme = _coilReady and compressPercentile >= 95
+
+float _bp_vco = _coilExtreme ? 30.0 : _coilMature ? 20.0 : _coilReady and vcoCompress < 0.75 ? 10.0 : i_vcoEnable and vcoScore > i_vcoThresh * 0.4 ? 5.0 : 0.0
+
+float _deltaSlope5    = delta_of - ta.sma(delta_of, 5)
+bool  _deltaRisingComp  = _deltaSlope5 > 0 and _coilReady and close >= close[3]
+bool  _deltaFallingComp = _deltaSlope5 < 0 and _coilReady and close <= close[3]
+float _bp_delta = (_deltaRisingComp or _deltaFallingComp) ? 22.0 : (zDeltaBull or zDeltaBear) and _coilReady ? 12.0 : 0.0
+
+bool _inFVGorOB    = isFVGBull or isFVGBear or inBullOB or inBearOB
+bool _dryIntoZone  = _inFVGorOB and _volDryingTrend and not vcoBreakout
+float _bp_fvgob    = _dryIntoZone ? 22.0 : _inFVGorOB and vcoCompress < 0.75 ? 10.0 : 0.0
+
+float _adaptHigh = ta.highest(high, adaptSwingLB)
+float _adaptLow  = ta.lowest(low,   adaptSwingLB)
+float _adaptRange = _adaptHigh - _adaptLow
+bool  _tightAdapt = _adaptRange < atr * (adaptSwingLB * 0.5)
+float _bp_tight   = _tightAdapt and _volDryingTrend ? 18.0 : _priceTightening ? 8.0 : 0.0
+
+float _bp_dir = (iofiBull and _coilReady) ? 8.0 : (iofiBear and _coilReady) ? 8.0 : 0.0
+
+float buildingPressureScore = math.min(_bp_vco + _bp_delta + _bp_fvgob + _bp_tight + _bp_dir, 100.0)
+float buildingPressureSmooth = ta.ema(buildingPressureScore, 3)
+
+bool pressureEarlyWarn = buildingPressureSmooth >= 30.0 and not vcoBreakout and _coilReady
+bool pressureFiresBull = buildingPressureSmooth >= 55.0 and (_deltaRisingComp or (iofiBull and _coilMature)) and not vcoBreakout
+bool pressureFiresBear = buildingPressureSmooth >= 55.0 and (_deltaFallingComp or (iofiBear and _coilMature)) and not vcoBreakout
+
+if pressureFiresBull and not pressureFiresBull[1]
+    label.new(bar_index, low, "🌀 COIL↑\n" + str.tostring(math.round(buildingPressureSmooth)) + "%",
+         yloc=yloc.belowbar, color=color.new(#BB86FC, 10), textcolor=color.white,
+         style=label.style_label_up, size=size.tiny)
+if pressureFiresBear and not pressureFiresBear[1]
+    label.new(bar_index, high, "🌀 COIL↓\n" + str.tostring(math.round(buildingPressureSmooth)) + "%",
+         yloc=yloc.abovebar, color=color.new(#FF6B00, 10), textcolor=color.white,
+         style=label.style_label_down, size=size.tiny)
+
+_causeBuilding   = _rangeDurBars >= 5 and _volDryingTrend and
+                   vcoCompress < 0.85 and not buildUpBullActive and not buildUpBearActive
+huntStage0Bull   = _causeBuilding and (nearPDL or eqLowZone or belowVAL)
+huntStage0Bear   = _causeBuilding and (nearPDH or eqHighZone or aboveVAH)
+var bool _priorSOS      = false
+var int  _priorSOSBar   = 0
+if wySOSValid
+    _priorSOS    := true
+    _priorSOSBar := bar_index
+if bar_index - _priorSOSBar > 100
+    _priorSOS    := false
+_reaccumActive  = _priorSOS and trendUp and
+                  (regime == "Ranging" or regime == "Choppy") and
+                  (vsaNoSupply or absorptionBull or vsaTest) and
+                  not wyDistribActive
+var bool _priorSOW      = false
+var int  _priorSOWBar   = 0
+if wySOWValid
+    _priorSOW    := true
+    _priorSOWBar := bar_index
+if bar_index - _priorSOWBar > 100
+    _priorSOW    := false
+_redistribActive = _priorSOW and trendDown and
+                   (regime == "Ranging" or regime == "Choppy") and
+                   (vsaNoDemand or absorptionBear) and
+                   not wyAccumActive
+huntStageStr := huntStage0Bull and huntChainStageBull == 0 and huntChainStageBear == 0 ? "🏗 S0 CAUSE↓ " + str.tostring(_rangeDurBars) + "b — building" : huntStage0Bear and huntChainStageBull == 0 and huntChainStageBear == 0 ? "🏗 S0 CAUSE↑ " + str.tostring(_rangeDurBars) + "b — building" : huntStageStr
+_scalpBase     = i_mode == "Scalp" ? math.max(math.min(65.0 - (fbScalpAcc - 0.6) * 20.0, 75.0), 55.0) : modeBaseThresh
+modeBaseFinal  = i_mode == "Scalp" ? _scalpBase : modeBaseThresh
+var float adaptiveThreshold = float(modeBaseThresh)
+
+int mkv_state = regime == "Breakout" ? 1 : regime == "Trending" ? 2 : regime == "Choppy" ? 3 : (_coilReady or _coilMature ? 0 : 3)
+
+var float kv_T_00 = 0.25, var float kv_T_01 = 0.40, var float kv_T_02 = 0.20, var float kv_T_03 = 0.15
+var float kv_T_10 = 0.10, var float kv_T_11 = 0.20, var float kv_T_12 = 0.55, var float kv_T_13 = 0.15
+var float kv_T_20 = 0.20, var float kv_T_21 = 0.10, var float kv_T_22 = 0.45, var float kv_T_23 = 0.25
+var float kv_T_30 = 0.35, var float kv_T_31 = 0.15, var float kv_T_32 = 0.15, var float kv_T_33 = 0.35
+
+var int   prevRegimeState = -1
+var string prevRegimeLabel = ""
+
+if barstate.isconfirmed and regime != prevRegimeLabel
+    int newState = regime == "Breakout" ? 1 : regime == "Trending" ? 2 : regime == "Choppy" ? 3 : 0
+    if prevRegimeState >= 0
+        float learnRate = 0.05
+        if prevRegimeState == 0
+            if newState == 0
+                kv_T_00 := kv_T_00 * (1 - learnRate) + learnRate * 1.0
+            if newState == 1
+                kv_T_01 := kv_T_01 * (1 - learnRate) + learnRate * 1.0
+            if newState == 2
+                kv_T_02 := kv_T_02 * (1 - learnRate) + learnRate * 1.0
+            if newState == 3
+                kv_T_03 := kv_T_03 * (1 - learnRate) + learnRate * 1.0
+        else if prevRegimeState == 1
+            if newState == 0
+                kv_T_10 := kv_T_10 * (1 - learnRate) + learnRate * 1.0
+            if newState == 1
+                kv_T_11 := kv_T_11 * (1 - learnRate) + learnRate * 1.0
+            if newState == 2
+                kv_T_12 := kv_T_12 * (1 - learnRate) + learnRate * 1.0
+            if newState == 3
+                kv_T_13 := kv_T_13 * (1 - learnRate) + learnRate * 1.0
+        else if prevRegimeState == 2
+            if newState == 0
+                kv_T_20 := kv_T_20 * (1 - learnRate) + learnRate * 1.0
+            if newState == 1
+                kv_T_21 := kv_T_21 * (1 - learnRate) + learnRate * 1.0
+            if newState == 2
+                kv_T_22 := kv_T_22 * (1 - learnRate) + learnRate * 1.0
+            if newState == 3
+                kv_T_23 := kv_T_23 * (1 - learnRate) + learnRate * 1.0
+        else if prevRegimeState == 3
+            if newState == 0
+                kv_T_30 := kv_T_30 * (1 - learnRate) + learnRate * 1.0
+            if newState == 1
+                kv_T_31 := kv_T_31 * (1 - learnRate) + learnRate * 1.0
+            if newState == 2
+                kv_T_32 := kv_T_32 * (1 - learnRate) + learnRate * 1.0
+            if newState == 3
+                kv_T_33 := kv_T_33 * (1 - learnRate) + learnRate * 1.0
+        
+        float sum0 = kv_T_00 + kv_T_01 + kv_T_02 + kv_T_03
+        if sum0 > 0
+            kv_T_00 := kv_T_00 / sum0
+            kv_T_01 := kv_T_01 / sum0
+            kv_T_02 := kv_T_02 / sum0
+            kv_T_03 := kv_T_03 / sum0
+        
+        float sum1 = kv_T_10 + kv_T_11 + kv_T_12 + kv_T_13
+        if sum1 > 0
+            kv_T_10 := kv_T_10 / sum1
+            kv_T_11 := kv_T_11 / sum1
+            kv_T_12 := kv_T_12 / sum1
+            kv_T_13 := kv_T_13 / sum1
+        
+        float sum2 = kv_T_20 + kv_T_21 + kv_T_22 + kv_T_23
+        if sum2 > 0
+            kv_T_20 := kv_T_20 / sum2
+            kv_T_21 := kv_T_21 / sum2
+            kv_T_22 := kv_T_22 / sum2
+            kv_T_23 := kv_T_23 / sum2
+        
+        float sum3 = kv_T_30 + kv_T_31 + kv_T_32 + kv_T_33
+        if sum3 > 0
+            kv_T_30 := kv_T_30 / sum3
+            kv_T_31 := kv_T_31 / sum3
+            kv_T_32 := kv_T_32 / sum3
+            kv_T_33 := kv_T_33 / sum3
+    
+    prevRegimeState := newState
+    prevRegimeLabel := regime
+
+float _mkv_pCoil  = mkv_state == 0 ? kv_T_00 : mkv_state == 1 ? kv_T_10 : mkv_state == 2 ? kv_T_20 : kv_T_30
+float _mkv_pBreak = mkv_state == 0 ? kv_T_01 : mkv_state == 1 ? kv_T_11 : mkv_state == 2 ? kv_T_21 : kv_T_31
+float _mkv_pTrend = mkv_state == 0 ? kv_T_02 : mkv_state == 1 ? kv_T_12 : mkv_state == 2 ? kv_T_22 : kv_T_32
+float _mkv_pChop  = mkv_state == 0 ? kv_T_03 : mkv_state == 1 ? kv_T_13 : mkv_state == 2 ? kv_T_23 : kv_T_33
+
+float _pressNorm   = buildingPressureSmooth / 100.0
+float _kfTrendBoost = kalmanBull ? 0.08 : kalmanBear ? 0.08 : 0.0
+float _mkv_pBreak_adj = math.min(_mkv_pBreak + _pressNorm * 0.30, 0.92)
+float _mkv_pTrend_adj = math.min(_mkv_pTrend + _kfTrendBoost, 0.92)
+
+float _mkv_sum  = _mkv_pCoil + _mkv_pBreak_adj + _mkv_pTrend_adj + _mkv_pChop
+float mkv_pCoil  = _mkv_sum > 0 ? math.round(_mkv_pCoil        / _mkv_sum * 100) : 25
+float mkv_pBreak = _mkv_sum > 0 ? math.round(_mkv_pBreak_adj   / _mkv_sum * 100) : 25
+float mkv_pTrend = _mkv_sum > 0 ? math.round(_mkv_pTrend_adj   / _mkv_sum * 100) : 25
+float mkv_pChop  = _mkv_sum > 0 ? math.round(_mkv_pChop        / _mkv_sum * 100) : 25
+
+string mkv_bestStr = mkv_pBreak >= mkv_pTrend and mkv_pBreak >= mkv_pCoil and mkv_pBreak >= mkv_pChop ? "⚡Break" + str.tostring(int(mkv_pBreak)) + "%" : mkv_pTrend >= mkv_pCoil and mkv_pTrend >= mkv_pChop ? "📈Trend" + str.tostring(int(mkv_pTrend)) + "%" : mkv_pCoil >= mkv_pChop ? "🌀Coil" + str.tostring(int(mkv_pCoil)) + "%" : "😴Chop" + str.tostring(int(mkv_pChop)) + "%"
+color mkv_bestCol = mkv_pBreak >= mkv_pTrend and mkv_pBreak >= mkv_pCoil and mkv_pBreak >= mkv_pChop ? c_gold : mkv_pTrend >= mkv_pCoil and mkv_pTrend >= mkv_pChop ? c_bull : mkv_pCoil >= mkv_pChop ? c_wy : c_bear
+string mkv_curStr = mkv_state == 0 ? "🌀Coil" : mkv_state == 1 ? "⚡Break" : mkv_state == 2 ? "📈Trend" : "😴Chop"
+float _eCoil  = math.max(1.6 - atrRatio, 0.05)
+float _eBreak = math.max(volRatio - 0.8, 0.05) * (vcoBreakout ? 1.5 : 1.0)
+float _eTrend = math.max(adxVal / 35.0, 0.05)  * (kalmanBull or kalmanBear ? 1.3 : 1.0)
+float _eChop  = math.max(1.3 - math.abs(adxVal - 22.0) / 22.0, 0.05) * ((_coilReady and not vcoBreakout) ? 0.7 : 1.0)
+float _h0 = (_mkv_pCoil  / 100.0) * _eCoil
+float _h1 = (_mkv_pBreak / 100.0) * _eBreak
+float _h2 = (_mkv_pTrend / 100.0) * _eTrend
+float _h3 = (_mkv_pChop  / 100.0) * _eChop
+float _hSum = math.max(_h0 + _h1 + _h2 + _h3, 0.001)
+float boProb = math.round(_h1 / _hSum * 100)
+float trProb = math.round(_h2 / _hSum * 100)
+float chProb = math.round(_h3 / _hSum * 100)
+bool _boWins = boProb >= 35 and boProb >= trProb and boProb >= chProb
+bool _trWins = trProb >= 30 and trProb >  boProb and trProb >= chProb
+bool _chWins = chProb >= 40 and chProb >  boProb and chProb >  trProb
+adaptiveThreshold := adaptiveThreshold + (_boWins ? -1.5 : _trWins ? -0.9 : _chWins ? 1.5 : 0.0)
+if i_dynEnable and i_dynEnable
+    _overallAcc   = (fbBullAcc + fbBearAcc) / 2.0
+    _targetThresh = modeBaseFinal + regime_threshAdj + sess_threshAdj
+    _accAdj       = (_overallAcc - 0.5) * -20.0
+    _targetThresh += _accAdj
+    _targetThresh := math.max(math.min(_targetThresh, 88.0), 35.0)
+    _snapFactor   = math.abs(regime_threshAdj) > 5.0 ? i_adaptSpeed * 0.3 : i_adaptSpeed * 0.1
+    adaptiveThreshold := adaptiveThreshold * (1.0 - _snapFactor) + _targetThresh * _snapFactor
+scalpFlowTriBull = zDeltaBull and iofiBull  and not divBlockLong
+scalpFlowTriBear = zDeltaBear and iofiBear  and not divBlockShrt
+scalpFlowTwoBull = (zDeltaBull and iofiBull) or (zDeltaBull and not divBlockLong and cvdBullDiv) or (iofiBull and cvdBullDiv)
+scalpFlowTwoBear = (zDeltaBear and iofiBear) or (zDeltaBear and not divBlockShrt and cvdBearDiv) or (iofiBear and cvdBearDiv)
+scalpPreCond     = regime != "Choppy" and isTrending
+scalpKZMult      = inAnyKZ ? 1.0 : 0.5
+fb_scalpMult = i_dynEnable and i_feedbackEnable ? f_fbWeight(fbScalpAcc) : 1.0
+scalpRawBull = math.round((scalpFlowTriBull ? 85 : scalpFlowTwoBull ? 65 : zDeltaBull ? 40 : 0) * fb_scalpMult) + (inBullOB or belowVAL ? 5 : 0)
+scalpRawBear = math.round((scalpFlowTriBear ? 85 : scalpFlowTwoBear ? 65 : zDeltaBear ? 40 : 0) * fb_scalpMult) + (inBearOB or aboveVAH ? 5 : 0)
+scalpScoreBull = scalpPreCond ? math.min(math.round(scalpRawBull * scalpKZMult), 100) : 0
+scalpScoreBear = scalpPreCond ? math.min(math.round(scalpRawBear * scalpKZMult), 100) : 0
+float wySwingBull = 0.0
+float wySwingBear = 0.0
+if regime == "Trending"
+    wySwingBull := float((wySpringValid ? 30 : mem_wySpring ? 20 : 0) + (wySOSValid ? 25 : 0) + (cmpPhaseExpanding ? 8 : 0) + (trendUp ? 7 : 0))
+    wySwingBear := float((wyUTValid ? 30 : mem_wyUT ? 20 : 0) + (wySOWValid ? 25 : 0) + (cmpBearPhase ? 8 : 0) + (trendDown ? 7 : 0))
+else if regime == "Ranging"
+    wySwingBull := float((belowVAL ? 30 : 0) + (vsaNoSupply or vsaTest ? 25 : 0) + (nearEQL ? 20 : 0) + (rsiVal < 40 ? 25 : 0))
+    wySwingBear := float((aboveVAH ? 30 : 0) + (vsaNoDemand ? 25 : 0) + (nearEQH ? 20 : 0) + (rsiVal > 60 ? 25 : 0))
+else if regime == "Breakout"
+    wySwingBull := float((iofiBull ? 35 : 0) + (zDeltaBull ? 30 : 0) + (vcoBreakout and vcoBullCoil ? 25 : 0) + (rawInstBuy ? 10 : 0))
+    wySwingBear := float((iofiBear ? 35 : 0) + (zDeltaBear ? 30 : 0) + (vcoBreakout and vcoBearCoil ? 25 : 0) + (rawInstSell ? 10 : 0))
+else
+    wySwingBull := float((wySpringValid and scalpFlowTriBull ? 40 : 0) + (absorptionBull and inBullOB ? 15 : 0))
+    wySwingBear := float((wyUTValid and scalpFlowTriBear ? 40 : 0) + (absorptionBear and inBearOB ? 15 : 0))
+float vcoTimingBonusBull = 0.0
+float vcoTimingBonusBear = 0.0
+if vcoBullCoil and cmpBullPhase
+    vcoTimingBonusBull := 15.0
+else if vcoBearCoil and cmpBearPhase
+    vcoTimingBonusBear := 15.0
+else if vcoBreakout and cmpPhaseTurning
+    vcoTimingBonusBull := 8.0
+    vcoTimingBonusBear := 8.0
+else if vcoScore > i_vcoThresh * 0.5
+    vcoTimingBonusBull := 4.0
+    vcoTimingBonusBear := 4.0
+swingFlowGateBull = not (useCLVGate and clv < clvHigh) and not divBlockLong
+swingFlowGateBear = not (useCLVGate and clv > clvLow)  and not divBlockShrt
+swingStructBull = (kalmanBullMSS ? 15 : bullMSS ? 12 : bullBOSConfirmed ? 11 : _bBOSV ? 8 : bullBOS ? 4 : mem_bullMSS ? 6 : 0) + (bullBOSFailed ? -5 : 0) + (_bSWP ? -3 : 0) + (_idmGL  ? -8 : 0) + (pvDivBear ? -5 : 0) + (liqGrabBull ? 8 : 0)
+swingStructBear = (kalmanBearMSS ? 15 : bearMSS ? 12 : bearBOSConfirmed ? 11 : _brBOSV ? 8 : bearBOS ? 4 : mem_bearMSS ? 6 : 0) + (bearBOSFailed ? -5 : 0) + (_brSWP ? -3 : 0) + (_idmGS ? -8 : 0) + (pvDivBull ? -5 : 0) + (liqGrabBear ? 8 : 0)
+tf1Weight = f_tfWeight(tf1)
+tf2Weight = f_tfWeight(tf2)
+swingHTFBull = math.round((tf1_tUp ? 8 : 0) * tf1Weight) + math.round((tf2_tUp ? 10 : 0) * tf2Weight) + (tf1_zDB ? 4 : 0) + (tf2_wSPR or tf2_wSOS ? 6 : 0)
+swingHTFBear = math.round((tf1_tDn ? 8 : 0) * tf1Weight) + math.round((tf2_tDn ? 10 : 0) * tf2Weight) + (tf1_zDBr ? 4 : 0) + (tf2_wUT or tf2_wSOW ? 6 : 0)
+swingHuntBull = huntChainPtsBull
+swingHuntBear = huntChainPtsBear
+fb_engulfMult = i_dynEnable and i_feedbackEnable ? f_fbWeight(fbEngulfAcc) : 1.0
+swingAccuracyBull = math.round((engulfAtBullOB ? 14 : 0) * fb_engulfMult) + (absorptionBull ? 6 : 0)
+swingAccuracyBear = math.round((engulfAtBearOB ? 14 : 0) * fb_engulfMult) + (absorptionBear ? 6 : 0)
+fb_swingMult = i_dynEnable and i_feedbackEnable ? f_fbWeight((fbBullAcc + fbBearAcc) / 2.0) : 1.0
+swingRawBull = math.round((wySwingBull + vcoTimingBonusBull + swingStructBull + swingHTFBull + swingHuntBull) * fb_swingMult) + swingAccuracyBull
+swingRawBear = math.round((wySwingBear + vcoTimingBonusBear + swingStructBear + swingHTFBear + swingHuntBear) * fb_swingMult) + swingAccuracyBear
+swingScoreBull = swingFlowGateBull ? f_sigmoid(swingRawBull, 130.0) : 0
+swingScoreBear = swingFlowGateBear ? f_sigmoid(swingRawBear, 130.0) : 0
+wyWeightInvest    = math.max(fbWyAcc   * 35, 5.0)
+vsaWeightInvest   = math.max(fbVSAAcc  * 25, 5.0)
+zWeightInvest     = math.max(fbZAcc    * 20, 5.0)
+huntWeightInvest  = math.max(fbHuntAcc * 25, 5.0)
+dynMaxInvest      = wyWeightInvest + vsaWeightInvest + zWeightInvest + huntWeightInvest + 18
+float fbWyRegime = regime == "Trending" ? fbWyTrend : regime == "Ranging" ? fbWyRange : regime == "Breakout" ? fbWyBreakout : fbWyChop
+float fbVSARegime= regime == "Trending" ? fbVSATrend : regime == "Breakout" ? (fbVSATrend + fbVSARange) / 2.0 : fbVSARange
+investWySignalBull  = wySpringValid or mem_wySpring or wySOSValid
+investWySignalBear  = wyUTValid     or mem_wyUT    or wySOWValid
+investVSASignalBull = vsaNoSupply   or vsaTest     or mem_vsaNoSupply
+investVSASignalBear = vsaNoDemand   or vsaEffortBear or mem_vsaNoDemand
+investZSignalBull   = zDeltaBull    or mem_zDeltaBull
+investZSignalBear   = zDeltaBear    or mem_zDeltaBear
+investHuntSignalBull= huntChainStageBull >= 3
+investHuntSignalBear= huntChainStageBear >= 3
+investRawBull = (investWySignalBull   ? wyWeightInvest   * fbWyRegime   : 0.0) +
+     (investVSASignalBull  ? vsaWeightInvest  * fbVSARegime  : 0.0) +
+     (investZSignalBull    ? zWeightInvest    * fbZAcc       : 0.0) +
+     (investHuntSignalBull ? huntWeightInvest * fbHuntAcc    : 0.0) +
+     (iofiBull             ? 10.0                            : 0.0) +
+     (vcoBreakout and vcoBullCoil ? 8.0                      : 0.0)
+investRawBear = (investWySignalBear   ? wyWeightInvest   * fbWyRegime   : 0.0) +
+     (investVSASignalBear  ? vsaWeightInvest  * fbVSARegime  : 0.0) +
+     (investZSignalBear    ? zWeightInvest    * fbZAcc       : 0.0) +
+     (investHuntSignalBear ? huntWeightInvest * fbHuntAcc    : 0.0) +
+     (iofiBear             ? 10.0                            : 0.0) +
+     (vcoBreakout and vcoBearCoil ? 8.0                      : 0.0)
+investRegimeOk   = regime == "Trending" or regime == "Ranging"
+investHTFBull    = tf1_tUp and tf2_tUp
+investHTFBear    = tf1_tDn and tf2_tDn
+investFbDataOk   = (fbWyAcc != 0.6 or fbVSAAcc != 0.6) or bar_index > 100
+investScoreBull  = (investRegimeOk and investHTFBull and investFbDataOk) ? f_sigmoid(investRawBull, dynMaxInvest) : 0
+investScoreBear  = (investRegimeOk and investHTFBear and investFbDataOk) ? f_sigmoid(investRawBear, dynMaxInvest) : 0
+int masterBullScore = 0
+int masterBearScore = 0
+string modePredLabel = ""
+if i_mode == "Scalp"
+    masterBullScore := scalpScoreBull
+    masterBearScore := scalpScoreBear
+    modePredLabel   := "⚡ SCALP"
+else if i_mode == "Swing"
+    masterBullScore := swingScoreBull
+    masterBearScore := swingScoreBear
+    modePredLabel   := "📊 SWING"
+else
+    masterBullScore := investScoreBull
+    masterBearScore := investScoreBear
+    modePredLabel   := "🏦 INVEST"
+masterBullScore := math.min(math.max(masterBullScore + cmpBullBonus, 0), 100)
+masterBearScore := math.min(math.max(masterBearScore + cmpBearBonus, 0), 100)
+masterIsBull = masterBullScore >= masterBearScore
+masterProb   = masterIsBull ? masterBullScore : masterBearScore
+masterDir    = masterIsBull ? "BUY" : "SELL"
+scalpThreshAdj = (i_mode == "Scalp" and not inAnyKZ) ? 15.0 : 0.0
+masterFires  = masterProb > (adaptiveThreshold - scalpThreshAdj)
+masterLabel = not masterFires  ? "⏸ NO EDGE — " + str.tostring(masterProb) + "%" : masterProb >= 75 ? "🔥 STRONG " + masterDir + " — " + str.tostring(masterProb) + "%" : masterProb >= 55 ? "✅ " + masterDir + " — " + str.tostring(masterProb) + "%" : "👀 LEAN " + masterDir + " — " + str.tostring(masterProb) + "%"
+masterCol    = not masterFires ? c_sub : masterProb >= 75 ? (masterIsBull ? c_bull : c_bear) : masterProb >= 55 ? (masterIsBull ? c_teal : c_pink) : (masterIsBull ? c_teal : c_pink)
+alertScoreMin = i_mode == "Scalp" ? 7 : i_mode == "Swing" ? 8 : 9
+bullScore = (trendUp?1:0) + (isTrending?1:0) + (rsiBull?1:0) + (inBullOB?1:0) + (belowVAL?2:isDiscount?1:0) + (inAnyKZ?1:0) + (rawInstBuy or huntAccBull?1:0) + (bullMSS or bullBOS?1:0) + (zDeltaBull?1:0) + (vsaNoSupply or vsaSellingClimax or vsaTest?1:0) + (wySpring or wySOS?1:0)
+bearScore = (trendDown?1:0) + (isTrending?1:0) + (rsiBear?1:0) + (inBearOB?1:0) + (aboveVAH?2:isPremium?1:0) + (inAnyKZ?1:0) + (rawInstSell or huntAccBear?1:0) + (bearMSS or bearBOS?1:0) + (zDeltaBear?1:0) + (vsaNoDemand or vsaBuyingClimax?1:0) + (wyUT or wySOW?1:0)
+bullCondNow = (longGateOpen ? 1:0) + (bullMSS or bullBOS ? 1:0) + (inAnyKZ ? 1:0) + (inBullOB or nearPOC or isDiscount or belowVAL ? 1:0) + (zDeltaBull or huntAccBull ? 1:0) + (bullScore >= alertScoreMin ? 1:0)
+bearCondNow = (shortGateOpen ? 1:0) + (bearMSS or bearBOS ? 1:0) + (inAnyKZ ? 1:0) + (inBearOB or nearPOC or isPremium or aboveVAH ? 1:0) + (zDeltaBear or huntAccBear ? 1:0) + (bearScore >= alertScoreMin ? 1:0)
+bullCondMem = (not (bullMSS or bullBOS) and mem_bullMSS ? 1:0) + (not (inBullOB or nearPOC or isDiscount or belowVAL) and _mBullOB <= i_memLen ? 1:0) + (not (zDeltaBull or huntAccBull) and mem_zDeltaBull ? 1:0) + (bullScore >= math.round(alertScoreMin * 0.85) ? 1:0)
+bearCondMem = (not (bearMSS or bearBOS) and mem_bearMSS ? 1:0) + (not (inBearOB or nearPOC or isPremium or aboveVAH) and _mBearOB <= i_memLen ? 1:0) + (not (zDeltaBear or huntAccBear) and mem_zDeltaBear ? 1:0) + (bearScore >= math.round(alertScoreMin * 0.85) ? 1:0)
+bullCondTotal = bullCondNow * 2 + bullCondMem
+bearCondTotal = bearCondNow * 2 + bearCondMem
+minCondTotal  = i_mode == "Scalp" ? 8 : i_mode == "Swing" ? 9 : 10
+minCondGap    = i_mode == "Scalp" ? 2 : i_mode == "Swing" ? 3 : 4
+strongLong  = bullCondTotal >= (minCondTotal + 2) and bullCondTotal >= bearCondTotal + minCondGap and masterFires
+strongShort = bearCondTotal >= (minCondTotal + 2) and bearCondTotal >= bullCondTotal + minCondGap and masterFires
+normalLong  = bullCondTotal >= minCondTotal and bullCondTotal >= bearCondTotal + 2 and not strongLong  and masterFires
+normalShort = bearCondTotal >= minCondTotal and bearCondTotal >= bullCondTotal + 2 and not strongShort and masterFires
+sLF = realtimeSig ? strongLong  : (strongLong  and barstate.isconfirmed)
+sSF = realtimeSig ? strongShort : (strongShort and barstate.isconfirmed)
+nLF = realtimeSig ? normalLong  : (normalLong  and barstate.isconfirmed)
+nSF = realtimeSig ? normalShort : (normalShort and barstate.isconfirmed)
+_checkBars       = i_mode == "Invest" ? 10 : i_mode == "Swing" ? 7 : 5
+_pastSignalBull  = (sLF[_checkBars] or nLF[_checkBars])
+_pastSignalBear  = (sSF[_checkBars] or nSF[_checkBars])
+
+_lowestSinceBull = ta.lowest(low, _checkBars)
+_highestSinceBear = ta.highest(high, _checkBars)
+
+_pastSlBull      = close[_checkBars] - atr[_checkBars] * slMult
+_pastSlBear      = close[_checkBars] + atr[_checkBars] * slMult
+
+_bullOutcome     = _pastSignalBull and (close > close[_checkBars]) and (_lowestSinceBull > _pastSlBull)
+_bearOutcome     = _pastSignalBear and (close < close[_checkBars]) and (_highestSinceBear < _pastSlBear)
+_bullWrong       = _pastSignalBull and ((close < close[_checkBars]) or (_lowestSinceBull <= _pastSlBull))
+_bearWrong       = _pastSignalBear and ((close > close[_checkBars]) or (_highestSinceBear >= _pastSlBear))
+if i_dynEnable and i_feedbackEnable
+    if _bullOutcome
+        fbBullAcc := fbBullAcc * (1 - i_adaptSpeed) + i_adaptSpeed * 1.0
+    else if _bullWrong
+        fbBullAcc := fbBullAcc * (1 - i_adaptSpeed) + i_adaptSpeed * 0.0
+    if _bearOutcome
+        fbBearAcc := fbBearAcc * (1 - i_adaptSpeed) + i_adaptSpeed * 1.0
+    else if _bearWrong
+        fbBearAcc := fbBearAcc * (1 - i_adaptSpeed) + i_adaptSpeed * 0.0
+    if wySpringValid[_checkBars] or wySOSValid[_checkBars]
+        _wyOut = close > close[_checkBars] ? 1.0 : 0.0
+        fbWyAcc := fbWyAcc * (1-i_adaptSpeed) + i_adaptSpeed * _wyOut
+        if regime == "Trending"
+            fbWyTrend := fbWyTrend * (1-i_adaptSpeed) + i_adaptSpeed * _wyOut
+        else if regime == "Ranging"
+            fbWyRange := fbWyRange * (1-i_adaptSpeed) + i_adaptSpeed * _wyOut
+        else if regime == "Breakout"
+            fbWyBreakout := fbWyBreakout * (1-i_adaptSpeed) + i_adaptSpeed * _wyOut
+        else
+            fbWyChop := fbWyChop * (1-i_adaptSpeed) + i_adaptSpeed * _wyOut
+    if vsaNoSupply[_checkBars]
+        fbVSAAcc := fbVSAAcc * (1-i_adaptSpeed) + i_adaptSpeed * (close > close[_checkBars] ? 1.0 : 0.0)
+        if regime == "Trending"
+            fbVSATrend := fbVSATrend * (1-i_adaptSpeed) + i_adaptSpeed * (close > close[_checkBars] ? 1.0 : 0.0)
+        else
+            fbVSARange := fbVSARange * (1-i_adaptSpeed) + i_adaptSpeed * (close > close[_checkBars] ? 1.0 : 0.0)
+    if zDeltaBull[_checkBars]
+        fbZAcc := fbZAcc * (1-i_adaptSpeed) + i_adaptSpeed * (close > close[_checkBars] ? 1.0 : 0.0)
+
+    if zDeltaBear[_checkBars]
+        fbZAcc := fbZAcc * (1-i_adaptSpeed) + i_adaptSpeed * (close < close[_checkBars] ? 1.0 : 0.0)
+    if huntChainStageBull[_checkBars] >= 3
+        fbHuntAcc := fbHuntAcc * (1-i_adaptSpeed) + i_adaptSpeed * (close > close[_checkBars] ? 1.0 : 0.0)
+    if scalpFlowTriBull[_checkBars] or scalpFlowTwoBull[_checkBars]
+        fbScalpAcc := fbScalpAcc * (1-i_adaptSpeed) + i_adaptSpeed * (close > close[_checkBars] ? 1.0 : 0.0)
+    if scalpFlowTriBear[_checkBars] or scalpFlowTwoBear[_checkBars]
+        fbScalpAcc := fbScalpAcc * (1-i_adaptSpeed) + i_adaptSpeed * (close < close[_checkBars] ? 1.0 : 0.0)
+    if engulfAtBullOB[_checkBars]
+        fbEngulfAcc := fbEngulfAcc * (1-i_adaptSpeed) + i_adaptSpeed * (close > close[_checkBars] ? 1.0 : 0.0)
+    if engulfAtBearOB[_checkBars]
+        fbEngulfAcc := fbEngulfAcc * (1-i_adaptSpeed) + i_adaptSpeed * (close < close[_checkBars] ? 1.0 : 0.0)
+fbBullAcc    := math.max(math.min(fbBullAcc,  1.0), 0.2)
+fbBearAcc    := math.max(math.min(fbBearAcc,  1.0), 0.2)
+fbWyAcc      := math.max(math.min(fbWyAcc,    1.0), 0.2)
+fbVSAAcc     := math.max(math.min(fbVSAAcc,   1.0), 0.2)
+fbZAcc       := math.max(math.min(fbZAcc,     1.0), 0.2)
+fbHuntAcc    := math.max(math.min(fbHuntAcc,  1.0), 0.2)
+fbScalpAcc   := math.max(math.min(fbScalpAcc, 1.0), 0.2)
+fbEngulfAcc  := math.max(math.min(fbEngulfAcc,1.0), 0.2)
+fbWyTrend    := math.max(math.min(fbWyTrend,  1.0), 0.2)
+fbWyRange    := math.max(math.min(fbWyRange,  1.0), 0.2)
+fbWyBreakout := math.max(math.min(fbWyBreakout,1.0),0.2)
+fbVSATrend   := math.max(math.min(fbVSATrend, 1.0), 0.2)
+fbVSARange   := math.max(math.min(fbVSARange, 1.0), 0.2)
+plotshape(sLF,             title="★ Long",  style=shape.triangleup,   location=location.belowbar, color=c_gold, size=size.normal)
+plotshape(sSF,             title="★ Short", style=shape.triangledown, location=location.abovebar, color=c_gold, size=size.normal)
+plotshape(nLF and not sLF, title="▲ Long",  style=shape.triangleup,   location=location.belowbar, color=c_bull, size=size.small)
+plotshape(nSF and not sSF, title="▼ Short", style=shape.triangledown, location=location.abovebar, color=c_bear, size=size.small)
+var label tpLbl = na
+var line  tpLn  = na
+isNewLong  = (sLF or nLF) and not (sLF[1] or nLF[1])
+isNewShort = (sSF or nSF) and not (sSF[1] or nSF[1])
+if isNewLong and showTPLabel
+    float _tp = na
+    float _sl = close - atr * slMult
+    string _tN = ""
+    if not na(nFVGBear) and nFVGBear > close
+        _tp := nFVGBear
+        _tN := "Bear FVG"
+    else if not na(vp_vah) and vp_vah > close
+        _tp := vp_vah
+        _tN := "VAH"
+    else if nearEQH and not na(eqHLv)
+        _tp := eqHLv
+        _tN := "EQH"
+    else
+        _tp := close + atr * 3
+        _tN := "ATR×3"
+    float _rr = math.abs(close - _tp) / math.max(math.abs(_sl - close), syminfo.mintick)
+    if _rr >= minRR
+        if not na(tpLbl)
+            label.delete(tpLbl)
+        if not na(tpLn)
+            line.delete(tpLn)
+        tpLbl := label.new(bar_index + 3, _tp,
+             "🎯 TP: " + _tN + "\n" + str.tostring(math.round(_tp * 100) / 100) +
+             "\nR:R " + str.tostring(math.round(_rr * 10) / 10) + ":1",
+             color=color.new(c_bull, 10),
+             textcolor=color.white,
+             style=label.style_label_left,
+             size=size.small)
+        tpLn  := line.new(bar_index, _tp, bar_index + 15, _tp,
+             color=color.new(c_bull, 50),
+             width=1,
+             style=line.style_dotted)
+if isNewShort and showTPLabel
+    float _tp = na
+    float _sl = close + atr * slMult
+    string _tN = ""
+    if not na(nFVGBull) and nFVGBull < close
+        _tp := nFVGBull
+        _tN := "Bull FVG"
+    else if not na(vp_val) and vp_val < close
+        _tp := vp_val
+        _tN := "VAL"
+    else if nearEQL and not na(eqLLv)
+        _tp := eqLLv
+        _tN := "EQL"
+    else
+        _tp := close - atr * 3
+        _tN := "ATR×3"
+    float _rr = math.abs(close - _tp) / math.max(math.abs(_sl - close), syminfo.mintick)
+    if _rr >= minRR
+        if not na(tpLbl)
+            label.delete(tpLbl)
+        if not na(tpLn)
+            line.delete(tpLn)
+        tpLbl := label.new(bar_index + 3, _tp,
+             "🎯 TP: " + _tN + "\n" + str.tostring(math.round(_tp * 100) / 100) +
+             "\nR:R " + str.tostring(math.round(_rr * 10) / 10) + ":1",
+             color=color.new(c_bear, 10),
+             textcolor=color.white,
+             style=label.style_label_left,
+             size=size.small)
+        tpLn  := line.new(bar_index, _tp, bar_index + 15, _tp,
+             color=color.new(c_bear, 50),
+             width=1,
+             style=line.style_dotted)
+f_diagL() =>
+    string _r = "✅ All clear"
+    if not vsaGateLong
+        _r := "VSA: No Demand"
+    else if not vpGateLong
+        _r := "VP: above VAH"
+    else if not wyGateLong
+        _r := "WY: " + (wyUT ? "UT" : "SOW")
+    else if divBlockLong
+        _r := "CVD: distribution"
+    else if not clvBull
+        _r := "CLV: " + str.tostring(math.round(clv*100)) + "%"
+    else if not bullFlow
+        _r := "VWAP: below"
+    else if not pdPass
+        _r := "PD: too far"
+    _r
+f_diagS() =>
+    string _r = "✅ All clear"
+    if not vsaGateShort
+        _r := "VSA: No Supply"
+    else if not vpGateShort
+        _r := "VP: below VAL"
+    else if not wyGateShort
+        _r := "WY: " + (wySpring ? "Spring" : "SOS")
+    else if divBlockShrt
+        _r := "CVD: accumulation"
+    else if not clvBear
+        _r := "CLV: " + str.tostring(math.round(clv*100)) + "%"
+    else if not bearFlow
+        _r := "VWAP: above"
+    else if not pdPass
+        _r := "PD: too far"
+    _r
+f_masterGate() =>
+    string _r = "⏸ WAIT"
+    if longGateOpen and shortGateOpen
+        _r := trendUp ? "✅ BUY gate open" : trendDown ? "✅ SELL gate open" : "✅ Both open"
+    else if longGateOpen
+        _r := "✅ BUY only"
+    else if shortGateOpen
+        _r := "✅ SELL only"
+    else
+        _r := "🚫 Both blocked"
+    _r
+f_masterGateCol() =>
+    color _r = c_bear
+    if longGateOpen and shortGateOpen
+        _r := c_bull
+    else if longGateOpen or shortGateOpen
+        _r := c_orange
+    _r
+f_tfGate(vsaGL, vsaGS, wyGL, wyGS, tUp, tDn) =>
+    string _r = "🚫 Both blocked"
+    bool _lOk = vsaGL and wyGL
+    bool _sOk = vsaGS and wyGS
+    if _lOk and _sOk
+        _r := tUp ? "✅ BUY clear" : tDn ? "✅ SELL clear" : "✅ Both clear"
+    else if _lOk
+        _r := "✅ BUY only"
+    else if _sOk
+        _r := "✅ SELL only"
+    _r
+f_tfGateCol(vsaGL, vsaGS, wyGL, wyGS) =>
+    color _r = c_bear
+    if (vsaGL and wyGL) and (vsaGS and wyGS)
+        _r := c_bull
+    else if (vsaGL and wyGL) or (vsaGS and wyGS)
+        _r := c_orange
+    _r
+f_tStr(tUp, tDn, adx) =>
+    (tUp ? "⬆ UP" : tDn ? "⬇ DOWN" : "➡ Side") + " ADX:" + str.tostring(math.round(adx)) + (adx >= adxMinEff ? "✅" : "⚠")
+f_rsiStr(r) =>
+    _s = str.tostring(math.round(r))
+    r > 70 ? _s + " 🔥 OB" : r > 55 ? _s + " ▲ Bull" : r < 30 ? _s + " 🥶 OS" : r < 45 ? _s + " ▼ Bear" : _s + " ─ Neut"
+f_rsiCol(r) =>
+    r > 55 ? c_bull : r < 45 ? c_bear : c_sub
+f_sStr(bMSS, brMSS, bBOS, brBOS) =>
+    bMSS ? "🔄 Flip UP" : brMSS ? "🔄 Flip DN" : bBOS ? "⬆ Break up" : brBOS ? "⬇ Break dn" : "─ No break"
+f_sCol(bMSS, brMSS, bBOS, brBOS) =>
+    (bMSS or bBOS) ? c_bull : (brMSS or brBOS) ? c_bear : c_sub
+f_volStr(r, inst, liq) =>
+    inst ? "🏦 BIG(" + str.tostring(math.round(r*10)/10) + "×)" : liq ? "⚠ Quiet(" + str.tostring(math.round(r*10)/10) + "×)" : "✅ Norm(" + str.tostring(math.round(r*10)/10) + "×)"
+f_volCol(inst, liq) =>
+    inst ? c_gold : liq ? c_bear : c_bull
+f_vsaStr(nd, ns, sc, bc, t, ef, th) =>
+    sc ? "SC panic sell" : bc ? "BC panic buy" : nd ? "ND no buyers" : ns ? "NS no sellers" : t ? "T supply gone" : ef ? "E↑ absorbed" : th ? "TH strength" : "─ Normal"
+f_vsaCol(nd, ns, sc, bc, t, ef, th) =>
+    sc ? c_vsa_sc : bc ? c_vsa_bc : nd ? c_vsa_nd : ns ? c_vsa_ns : t ? c_vsa_test : ef ? c_vsa_eff : th ? c_vsa_th : c_sub
+f_wyStr(spr, sos, sow, ut, ar, st, sc, ps) =>
+    spr ? "⚡ Spring=BUY" : sos ? "✅ SOS=up" : sow ? "⚠ SOW=down" : ut ? "🔴 UT=fake top" : ar ? "AR rally" : st ? "ST secondary" : sc ? "SC bottom" : ps ? "PS topping" : "─ None"
+f_wyCol(spr, sos, sow, ut) =>
+    (spr or sos) ? c_bull : (sow or ut) ? c_bear : c_wy
+tPos = tablePos == "Top Left" ? position.top_left : tablePos == "Bottom Right" ? position.bottom_right : tablePos == "Bottom Left" ? position.bottom_left : position.top_right
+f_inst_col1aa() =>
+    string _s = ""
+    color  _c = color.new(#888888,0)
+    if i_mode == "Scalp"
+        if huntAccBull and rawInstBuy and _tf1AgreesBull
+            _s := "Large buy orders confirmed. Sellers swept — buyers in control."
+            _c := color.new(#00C076,0)
+        else if huntAccBear and rawInstSell and _tf1AgreesBear
+            _s := "Large sell orders confirmed. Buyers swept — sellers in control."
+            _c := color.new(#FF3B3B,0)
+        else if _absorpToAggrBull
+            _s := "Inst switched: loading → pushing up."
+            _c := color.new(#00C076,0)
+        else if _absorpToAggrBear
+            _s := "Inst switched: distributing → pushing down."
+            _c := color.new(#FF3B3B,0)
+        else if iofiBull and zDeltaBull and vcoBreakout and _tf1AgreesBull
+            _s := "Strong buy flow + HTF support — ride up."
+            _c := color.new(#00C076,0)
+        else if iofiBear and zDeltaBear and vcoBreakout and _tf1AgreesBear
+            _s := "Strong sell flow + HTF support — ride down."
+            _c := color.new(#FF3B3B,0)
+        else if isHuntBull and _locUrgencyBull >= 3
+            _s := "Sweep below key level — watch for reversal up."
+            _c := color.new(#FF6B00,0)
+        else if isHuntBear and _locUrgencyBear >= 3
+            _s := "Sweep above key level — watch for reversal down."
+            _c := color.new(#FF6B00,0)
+        else if vsaBuyingClimax
+            _s := "Buying climax — inst selling into excitement. Don't chase up."
+            _c := color.new(#FF3B3B,0)
+        else if exhaustBull
+            _s := "Buyer exhaustion. Reversal up likely — wait for confirm."
+            _c := color.new(#00BCD4,0)
+        else if exhaustBear
+            _s := "Seller exhaustion. Reversal down likely — wait for confirm."
+            _c := color.new(#FF69B4,0)
+    [_s, _c]
+
+f_inst_col1ab() =>
+    string _s = ""
+    color  _c = color.new(#888888,0)
+    if i_mode == "Swing"
+        if isTrapLong or isTrapShort
+            _s := "Inst trap. Retail lured in before reversal."
+            _c := color.new(#FF6B00,0)
+        else if isParabolic and vsaBuyingClimax
+            _s := "Parabolic + climax — inst offloading into spike."
+            _c := color.new(#FF3B3B,0)
+        else if _absorpToAggrBull and _tf1AgreesBull
+            _s := "Inst finished loading — pushing up aggressively."
+            _c := color.new(#00C076,0)
+        else if _absorpToAggrBear and _tf1AgreesBear
+            _s := "Inst finished distributing — pushing down aggressively."
+            _c := color.new(#FF3B3B,0)
+        else if huntAccBull and rawInstBuy
+            _s := "Liq swept below, large buy confirmed — inst took long."
+            _c := color.new(#00C076,0)
+        else if huntAccBear and rawInstSell
+            _s := "Liq swept above, large sell confirmed — inst took short."
+            _c := color.new(#FF3B3B,0)
+        else if wySpringValid and _springRangeSufficient
+            _s := "Spring confirmed — big players about to push up."
+            _c := color.new(#00C076,0)
+        else if wyUTValid
+            _s := "Upthrust confirmed — inst faked breakout to sell strength."
+            _c := color.new(#FF3B3B,0)
+        else if _fullAlignBull
+            _s := "Full MTF alignment — inst pushing up."
+            _c := color.new(#00C076,0)
+        else if _fullAlignBear
+            _s := "Full MTF alignment — inst pushing down."
+            _c := color.new(#FF3B3B,0)
+        else if _partAlignBull and kalmanFlipUp
+            _s := "Partial↑+KF flip up. MTF align 1–5b — early long."
+            _c := color.new(#5DCAA5,0)
+        else if _partAlignBear and kalmanFlipDown
+            _s := "Partial↓+KF flip down. MTF align 1–5b — early short."
+            _c := color.new(#ED93B1,0)
+        else if _partAlignBull
+            _s := "Partial↑ — TF1 ok, TF2 lag. Same dir, half size."
+            _c := color.new(#5DCAA5,0)
+        else if _partAlignBear
+            _s := "Partial↓ — TF1 ok, TF2 lag. Same dir, half size."
+            _c := color.new(#ED93B1,0)
+        else if exhaustBull
+            _s := "Buyer momentum exhausted. Inst likely reversing."
+            _c := color.new(#00BCD4,0)
+        else if exhaustBear
+            _s := "Seller momentum exhausted. Inst likely reversing."
+            _c := color.new(#FF69B4,0)
+        else if secondShakeout
+            _s := "Second shakeout — shaking weak hands before real move."
+            _c := color.new(#FF6B00,0)
+    [_s, _c]
+
+f_inst_col1b() =>
+    string _s = ""
+    color  _c = color.new(#888888,0)
+    if i_mode == "Invest"
+        if _fullAlignBull
+            _s := "Full MTF align — accum complete, markup confirmed."
+            _c := color.new(#00C076,0)
+        else if _fullAlignBear
+            _s := "Full MTF align down — distrib complete, markdown confirmed."
+            _c := color.new(#FF3B3B,0)
+        else if wySpringValid and _springRangeSufficient
+            _s := "Spring confirmed after " + str.tostring(_rangeDurBars) + " bars of accumulation — major move building."
+            _c := color.new(#00C076,0)
+        else if wySOSValid
+            _s := "SOS confirmed — inst breaking structure, markup starting."
+            _c := color.new(#00C076,0)
+        else if wyUTValid
+            _s := "Upthrust confirmed — distrib phase, inst offloading at highs."
+            _c := color.new(#FF3B3B,0)
+        else if wySOWValid
+            _s := "SOW confirmed — inst breaking structure, markdown starting."
+            _c := color.new(#FF3B3B,0)
+        else if _reaccumActive
+            _s := "Re-accum — inst adding longs in pause."
+            _c := color.new(#00C076,0)
+        else if _redistribActive
+            _s := "Re-distrib — inst adding shorts in rally."
+            _c := color.new(#FF3B3B,0)
+        else if _rangeDurBars > 50 and wyAccumActive
+            _s := "Long accumulation phase (" + str.tostring(_rangeDurBars) + " bars) — institutions building a large position."
+            _c := color.new(#00BCD4,0)
+        else if _rangeDurBars > 20 and wyAccumActive
+            _s := "Accumulation — quietly loading, no direction yet."
+            _c := color.new(#888888,0)
+        else if wyDistribActive and _rangeDurBars > 20
+            _s := "Distribution — quietly selling, reduce longs."
+            _c := color.new(#FF3B3B,0)
+        else if rawInstBuy
+            _s := "Inst buying — size entering here."
+            _c := color.new(#00BCD4,0)
+        else if rawInstSell
+            _s := "Inst selling — size exiting/shorting here."
+            _c := color.new(#FF69B4,0)
+        else
+            _s := "No inst signal — wait for accum/distrib."
+            _c := color.new(#888888,0)
+    else if _s == ""
+        if regime == "Ranging" or regime == "Choppy"
+            _s := "No inst activity — both sides testing."
+            _c := color.new(#888888,0)
+        else if trendUp and isTrending
+            _s := "Inst uptrend — no reversal yet."
+            _c := color.new(#00C076,0)
+        else if trendDown and isTrending
+            _s := "Inst downtrend — no reversal yet."
+            _c := color.new(#FF3B3B,0)
+        else
+            _s := "No inst activity — both sides testing."
+            _c := color.new(#888888,0)
+    [_s, _c]
+
+f_inst_predict() =>
+    string _dir   = masterIsBull ? "up" : "down"
+    string _arrow = masterIsBull ? "↑" : "↓"
+    color  _dc    = masterIsBull ? color.new(#00C076,0) : color.new(#FF3B3B,0)
+    string _conf  = masterProb >= 80 ? "Very high confidence" : masterProb >= 70 ? "High confidence" : masterProb >= 60 ? "Decent confidence" : masterProb >= 50 ? "Medium confidence" : "Low confidence"
+    color  _cc    = masterProb >= 80 ? color.new(#FFD700,0) : masterProb >= 70 ? color.new(#FFD700,0) : masterProb >= 60 ? color.new(#00BCD4,0) : color.new(#FF6B00,0)
+    string _tgt = ""
+    if masterIsBull
+        if huntTargetAboveNear
+            _tgt := str.tostring(math.round(huntTargetAbove * 100) / 100)
+        else if not na(vp_vah) and vp_vah > close
+            _tgt := str.tostring(math.round(vp_vah * 100) / 100)
+        else if not na(nFVGBear) and nFVGBear > close
+            _tgt := str.tostring(math.round(nFVGBear * 100) / 100)
+        else if nearEQH and not na(eqHLv)
+            _tgt := str.tostring(math.round(eqHLv * 100) / 100)
+        else if not na(vp_poc) and vp_poc > close
+            _tgt := str.tostring(math.round(vp_poc * 100) / 100)
+    else
+        if huntTargetBelowNear
+            _tgt := str.tostring(math.round(huntTargetBelow * 100) / 100)
+        else if not na(vp_val) and vp_val < close
+            _tgt := str.tostring(math.round(vp_val * 100) / 100)
+        else if not na(nFVGBull) and nFVGBull < close
+            _tgt := str.tostring(math.round(nFVGBull * 100) / 100)
+        else if nearEQL and not na(eqLLv)
+            _tgt := str.tostring(math.round(eqLLv * 100) / 100)
+        else if not na(vp_poc) and vp_poc < close
+            _tgt := str.tostring(math.round(vp_poc * 100) / 100)
+    float  _estATR = _rangeDurBars >= 30 ? (1.0 - math.min(vcoCompress, 1.0)) * 3.0 + 1.0 : 1.2
+    string _estStr = str.tostring(math.round(_estATR * 10) / 10) + "×ATR"
+    string _trap  = _trapRiskBull >= 60 and masterIsBull ? " Trap risk high — size down." : _trapRiskBear >= 60 and not masterIsBull ? " Trap risk high — size down." : ""
+    string _inv   = masterIsBull ? " Exit if price closes below the sweep low." : " Exit if price closes above the sweep high."
+    string _chopWarn = _chWins ? " ⚠ Chop dominant (CH:" + str.tostring(chProb) + "%) — reduce size or wait." : (chProb >= 40 and masterFires) ? " Chop risk " + str.tostring(chProb) + "%." : ""
+    string _fboNote = _fboRisk >= _fboWarnThresh and masterFires ? " ⚠ FBO risk " + str.tostring(_fboRisk) + "% (" + (masterIsBull ? _fboReasonBull : _fboReasonBear) + ") — confirm close." : ""
+    string _mkvNote = (i_mode == "Swing" or i_mode == "Invest") ? " Next: " + mkv_bestStr + "." : ""
+    string _pred  = ""
+    color  _pc    = color.new(#BB86FC,0)
+
+    if isTrapLong or isTrapShort
+        _pred := "🚨 Trap active — do not enter."
+        _pc   := color.new(#FF6B00,0)
+
+    else if bearTrapConf
+        _pred := "✅ Bear trap confirmed. Price swept lows then rejected — reversal UP underway. " + _conf + "." + (huntTargetAboveNear ? " Target: " + str.tostring(math.round(huntTargetAbove*100)/100) + "." : "")
+        _pc   := color.new(#00C076, 0)
+    else if bullTrapConf
+        _pred := "✅ Bull trap confirmed. Price swept highs then rejected — reversal DOWN underway. " + _conf + "." + (huntTargetBelowNear ? " Target: " + str.tostring(math.round(huntTargetBelow*100)/100) + "." : "")
+        _pc   := color.new(#FF3B3B, 0)
+
+    else if _fboWarnBull
+        _pred := "⚠ FALSE BREAKOUT UP. BOS fired but " + _fboReasonBull + ". Expect reversal back DOWN. Do not chase."
+        _pc   := color.new(#FF6B00, 0)
+    else if _fboWarnBear
+        _pred := "⚠ FALSE BREAKOUT DOWN. BOS fired but " + _fboReasonBear + ". Expect reversal back UP. Do not chase."
+        _pc   := color.new(#FF6B00, 0)
+
+    else if earlyBullBOS
+        _pred := "⚡ Vel flipped UP. Breakout UP highly probable."
+        _pc   := color.new(#FFD700, 0)
+    else if earlyBearBOS
+        _pred := "⚡ Vel flipped DOWN. Breakout DOWN highly probable."
+        _pc   := color.new(#FFD700, 0)
+
+    else if _absorpToAggrBull
+        _pred := "🏦 Inst phase switch ↑. Loading done — pushing UP. High-prob long." + (_tgt != "" ? " Target: " + _tgt + "." : "") + _mkvNote
+        _pc   := color.new(#00C076, 0)
+    else if _absorpToAggrBear
+        _pred := "🏦 Inst phase switch ↓. Distrib done — pushing DOWN. High-prob short." + (_tgt != "" ? " Target: " + _tgt + "." : "") + _mkvNote
+        _pc   := color.new(#FF3B3B, 0)
+
+    else if vsaBuyingClimax and (wyPS or wyDistribActive)
+        _pred := "🔴 BC+PS: Inst distributing. Avoid longs — UT drop likely."
+        _pc   := color.new(#FF3B3B, 0)
+
+    else if (wyST or str.contains(wyPhase, "ST")) and vsaNoSupply and wyAccumActive
+        _pred := "🟡 ST+NoSupply: Zero sellers. Spring 1–3 bars. Long above ST high."
+        _pc   := color.new(#FFD700, 0)
+
+    else if (wySpringValid[1] or wySpringValid[2] or wySpringValid[3]) and vsaTest and wyAccumActive
+        _pred := "✅ Spring low vol test — no supply. SOS 1–3b. Long above test high."
+        _pc   := color.new(#00C076, 0)
+
+    else if liqGrabBull and wyPipelineStage >= 3 and wyAccumActive
+        _pred := "🎯 Wick+delta↑ at ST. Inst longs grabbed. Spring 1–3b. Enter above wick."
+        _pc   := color.new(#00C076, 0)
+    else if liqGrabBear and wyPipelineStage >= 3 and wyDistribActive
+        _pred := "🎯 Wick+delta↓ at UT. Inst shorts grabbed. SOW 1–3b. Enter below wick."
+        _pc   := color.new(#FF3B3B, 0)
+
+    else if _springTooEarly
+        _pred := "⚠ Spring fired but range only " + str.tostring(_rangeDurBars) + " bars — too early. Second shakeout likely. Wait for lower low on low volume then re-enter."
+        _pc   := color.new(#FF6B00, 0)
+
+
+
+    else if wySpringValid and iofiBull and cvdBullDiv
+        _pred := "⚡ Spring+IOFI+CVD: Inst absorbed. Reversal up."
+        _pc   := color.new(#00C076, 0)
+
+    else if _springRangeSufficient and wySpringValid and absorptionBull and (nearVAL or belowVAL)
+        _pred := "📊 Spring@VAL+absorb: Inst loading. Major low."
+        _pc   := color.new(#00C076, 0)
+
+    else if utad and absorptionBear and (nearVAH or aboveVAH)
+        _pred := "🔴 UTAD@VAH+absorb: Inst distributing. High-prob short."
+        _pc   := color.new(#FF3B3B, 0)
+
+    else if _reaccumActive and absorptionBull and nearPOC
+        _pred := "🔄 Re-accum@POC: Inst defending FV. Markup."
+        _pc   := color.new(#00C076, 0)
+
+    else if secondShakeout and vsaSellingClimax and _extremeStretch
+        _pred := "💥 2nd shakeout+panic: Inst entry. Best R:R long."
+        _pc   := color.new(#00C076, 0)
+
+    else if wySOSValid and iofiBull and isHighV
+        _pred := "🚀 SOS+agg buy+high vol. Breakout confirmed."
+        _pc   := color.new(#00C076, 0)
+
+    else if wySC and iofiBull and zDeltaBull
+        _pred := "🕯️ SC+IOFI+Delta: Smart money buying the low."
+        _pc   := color.new(#00C076, 0)
+
+    else if kalmanFlipUp and iofiBull and aboveVAH
+        _pred := "📈 KF flip>VAH+IOFI: Premium break. Long."
+        _pc   := color.new(#00C076, 0)
+
+    else if kalmanFlipDown and iofiBear and belowVAL
+        _pred := "📉 KF flip<VAL+IOFI: Discount break. Short."
+        _pc   := color.new(#FF3B3B, 0)
+
+    else if _coilMature and _volDryingTrend and inValueArea
+        _pred := "⏳ Coil+dry vol in VA: Inst building. Breakout pending."
+        _pc   := color.new(#00BCD4, 0)
+    else if masterFires
+        if i_mode == "Scalp"
+            string _huntCtx = huntChainStageBull >= 4 ? " Hunt S" + str.tostring(huntChainStageBull) + " (" + str.tostring(huntChainConfBull) + "% conf)." : huntChainStageBear >= 4 ? " Hunt S" + str.tostring(huntChainStageBear) + " (" + str.tostring(huntChainConfBear) + "% conf)." : ""
+            _pred := "Quick move " + _dir + (_tgt != "" ? " toward " + _tgt : "") + " in next 2–4 candles." + _huntCtx + " " + _conf + ". " + _estStr + " expected." + _trap + _fboNote + _chopWarn + " Exit fast if session ends."
+            _pc   := _chWins ? color.new(#FF6B00, 0) : _dc
+        else if i_mode == "Swing"
+            string _wyNext = wyPipelineStage == 4 ? " Wyckoff entry confirmed." : wyPipelineStage == 3 ? " Wyckoff setup maturing." : ""
+            _pred := "Price heading " + _dir + (_tgt != "" ? " toward " + _tgt : "") + "." + _wyNext + " " + _conf + ". Est " + _estStr + "." + _trap + _fboNote + _chopWarn + _inv + _mkvNote
+            _pc   := _chWins ? color.new(#FF6B00, 0) : _dc
+        else
+            string _phase = wyAccumActive ? " Accumulation phase complete." : wyDistribActive ? " Distribution phase complete." : ""
+            _pred := "Major move " + _dir + " building." + _phase + (_tgt != "" ? " Target zone " + _tgt + "." : "") + " " + _conf + " — " + str.tostring(masterProb) + "%. Est " + _estStr + "." + _trap + _fboNote + _chopWarn + _inv + _mkvNote
+            _pc   := _chWins ? color.new(#FF6B00, 0) : _dc
+
+    else if cvdBullDiv
+        _pred := "📊 CVD bull div — reversal UP building. Confirm."
+        _pc   := color.new(#00BCD4, 0)
+    else if cvdBearDiv
+        _pred := "📊 CVD bear div — reversal DOWN building. Confirm."
+        _pc   := color.new(#FF69B4, 0)
+
+    else if _partAlignBull and kalmanFlipUp
+        _pred := "📶 Partial↑+KF UP. MTF align imminent. Early long, half size." + _mkvNote
+        _pc   := color.new(#5DCAA5, 0)
+    else if _partAlignBear and kalmanFlipDown
+        _pred := "📶 Partial↓+KF DOWN. MTF align imminent. Early short, half size." + _mkvNote
+        _pc   := color.new(#ED93B1, 0)
+
+    else if _huntCoilingBull
+        _pred := "🧲 Hunt coiling at key support (S" + str.tostring(huntChainStageBull) + "). Inst sweep likely within 3–5 bars. Pre-position or wait for the wick, then long."
+        _pc   := color.new(#FF6B00, 0)
+    else if _huntCoilingBear
+        _pred := "🧲 Hunt coiling at key resistance (S" + str.tostring(huntChainStageBear) + "). Inst sweep likely within 3–5 bars. Pre-position or wait for the wick, then short."
+        _pc   := color.new(#FF6B00, 0)
+
+    else if pressureFiresBull
+        _pred := "🌀 Coil building upward (" + str.tostring(math.round(buildingPressureSmooth)) + "%). Volume drying, price compressing, delta rising. Watch for bullish breakout" + (not na(vp_vah) ? " above VAH " + str.tostring(math.round(vp_vah * 100) / 100) : "") + "."
+        _pc   := color.new(#BB86FC, 0)
+    else if pressureFiresBear
+        _pred := "🌀 Coil building downward (" + str.tostring(math.round(buildingPressureSmooth)) + "%). Volume drying, price compressing, delta falling. Watch for bearish breakdown" + (not na(vp_val) ? " below VAL " + str.tostring(math.round(vp_val * 100) / 100) : "") + "."
+        _pc   := color.new(#FF6B00, 0)
+
+    else if pressureEarlyWarn
+        string _dirEarly = _deltaRisingComp ? "upward" : _deltaFallingComp ? "downward" : ""
+        _pred := "⏳ Pressure building (" + str.tostring(math.round(buildingPressureSmooth)) + "%) — coil not yet confirmed. " + (_dirEarly != "" ? "Bias leaning " + _dirEarly + "." : "") + " Wait for COIL↑/↓ signal."
+        _pc   := color.new(#00BCD4, 0)
+
+    else
+        _pred := "No inst signal — wait for sweep."
+        _pc   := color.new(#555555,0)
+    
+    [_pred, _pc]
+
+var table hud = na
+f_c(col, row, txt, tc) => table.cell(hud, col, row, txt, text_color=tc, bgcolor=c_bg, text_size=tSize)
+f_h(col, row, txt, bg)  => table.cell(hud, col, row, txt, text_color=c_sub, bgcolor=bg, text_size=tSize)
+f_line1(s) => str.contains(s, " — ") ? str.substring(s, 0, str.pos(s, " — ")) : s
+f_line2(s) => str.contains(s, " — ") ? str.substring(s, str.pos(s, " — ") + 3, str.length(s)) : ""
+if barstate.islast and showTable
+    if not na(hud)
+        table.delete(hud)
+    int _rows = i_mode == "Scalp" ? 13 : 12
+    int _rMPred = i_mode == "Scalp" ? 10 : 9
+    int _rInst  = i_mode == "Scalp" ? 11 : 10
+    int _rPred  = i_mode == "Scalp" ? 12 : 11
+    hud := table.new(tPos, 4, _rows, bgcolor=color.new(#0D0D0D,5), border_color=color.new(#333333,0), border_width=1, frame_color=color.new(#444444,0), frame_width=1)
+
+    _modeHdr = i_mode == "Scalp" ? "⚡ SCALP" : i_mode == "Swing" ? "📊 SWING" : "🏦 INVEST"
+    table.cell(hud, 0, 0, _modeHdr,               text_color=c_mode, bgcolor=c_hdr,  text_size=tSize)
+    f_h(1, 0, "NOW · " + f_tfL(curTFStr),          c_hdr)
+    f_h(2, 0, f_tfL(tf1) + " (TF1)",               c_hdr2)
+    f_h(3, 0, f_tfL(tf2) + " (TF2)",               c_hdr3)
+
+
+    _regStr = regime + " [" + str.tostring(regimePersistCt) + "b]"
+    _amdStr = wyAccumActive and wyPipelineStage >= 3 ? " · Accum" : wyDistribActive and wyPipelineStage >= 3 ? " · Distrib" : huntChainStageBull >= 3 or huntChainStageBear >= 3 ? " · Manip" : trendUp and regime == "Trending" ? " · Markup" : trendDown and regime == "Trending" ? " · Markdown" : _reaccumActive ? " · Reaccum" : _redistribActive ? " · Redistrib" : ""
+    table.cell(hud, 0, 1, "Regime",  text_color=c_sub, bgcolor=color.new(#0D0D0D,0), text_size=tSize)
+    table.cell(hud, 1, 1, _regStr + _amdStr, text_color=regimeCol, bgcolor=regime == "Trending" ? color.new(color.green,92) : regime == "Breakout" ? color.new(#FFD700,92) : regime == "Choppy" ? color.new(color.red,92) : color.new(#00BCD4,92), text_size=tSize)
+    table.cell(hud, 2, 1, masterLabel, text_color=masterCol, bgcolor=color.new(#0D0D0D,0), text_size=tSize)
+    table.cell(hud, 3, 1, "Now:" + mkv_curStr + " → " + mkv_bestStr, text_color=mkv_bestCol, bgcolor=color.new(#0D0D0D,0), text_size=tSize)
+
+    f_c(0, 2, "Trend", c_sub)
+    f_c(1, 2, f_tStr(trendUp, trendDown, adxVal) + " | " + _dominantEMALabel, trendUp ? c_bull : trendDown ? c_bear : c_sub)
+    f_c(2, 2, f_tStr(tf1_tUp, tf1_tDn, tf1_adx), tf1_tUp ? c_bull : tf1_tDn ? c_bear : c_sub)
+    f_c(3, 2, f_tStr(tf2_tUp, tf2_tDn, tf2_adx), tf2_tUp ? c_bull : tf2_tDn ? c_bear : c_sub)
+
+    _wyPhaseShort = str.length(wyPhase) > 18 ? str.substring(wyPhase, 0, 18) : wyPhase
+    _wyPhaseCol   = str.contains(wyPhase,"BUY") or str.contains(wyPhase,"BREAKOUT") ? c_bull : str.contains(wyPhase,"SELL") or str.contains(wyPhase,"BREAKDOWN") or str.contains(wyPhase,"Panic") ? c_bear : str.contains(wyPhase,"🟡") ? c_orange : c_wy
+    _tf1_wyCol    = str.contains(tf1_wyPhase,"Breakout↑") ? c_bull : str.contains(tf1_wyPhase,"Breakdown↓") or str.contains(tf1_wyPhase,"Panic") ? c_bear : str.contains(tf1_wyPhase,"🟡") ? c_orange : c_wy
+    _tf2_wyCol    = str.contains(tf2_wyPhase,"Breakout↑") ? c_bull : str.contains(tf2_wyPhase,"Breakdown↓") or str.contains(tf2_wyPhase,"Panic") ? c_bear : str.contains(tf2_wyPhase,"🟡") ? c_orange : c_wy
+    f_c(0, 3, "Wyckoff", c_sub)
+    f_c(1, 3, _wyPhaseShort, _wyPhaseCol)
+    f_c(2, 3, tf1_wyPhase,   _tf1_wyCol)
+    f_c(3, 3, tf2_wyPhase,   _tf2_wyCol)
+
+
+    _sqTotal      = ((longGateOpen or shortGateOpen) ? 2 : 0) + (wyPipelineStage >= 5 ? 3 : wyPipelineStage >= 4 ? 2 : wyPipelineStage >= 3 ? 1 : 0) + (huntChainStageBull >= 4 or huntChainStageBear >= 4 ? 3 : huntChainStageBull >= 2 or huntChainStageBear >= 2 ? 1 : 0) + ((tf1_tUp and trendUp) or (tf1_tDn and trendDown) ? 2 : (tf1_tUp or tf1_tDn) ? 1 : 0) + (nearPOC ? 1 : belowVAL or aboveVAH ? 2 : inValueArea ? 1 : 0)
+    _huntStageStr = huntChainStageBull > 0 ? "Bull S" + str.tostring(huntChainStageBull) : huntChainStageBear > 0 ? "Bear S" + str.tostring(huntChainStageBear) : "No Hunt"
+    _huntTgtStr   = huntTargetBelowNear ? "TGT↓" + str.tostring(math.round(huntTargetBelow*100)/100) : huntTargetAboveNear ? "TGT↑" + str.tostring(math.round(huntTargetAbove*100)/100) : "─"
+    _huntProb     = huntTargetBelowNear ? _huntProbBull : huntTargetAboveNear ? _huntProbBear : 0
+    _huntPredStr  = _huntProb > 0 ? "Pred:" + str.tostring(_huntProb) + "% " + (huntTargetBelowNear ? "↓" : "↑") + " " + (inAnyKZ ? "Sess✅" : "Off⚠") : _sweptBarsAgo >= 0 and _sweptBarsAgo <= 10 ? "Swept " + str.tostring(_sweptBarsAgo) + "b ago" : "Decay:" + str.tostring(math.max(barsNearBullLevel, barsNearBearLevel)) + "/20b"
+    _htfAlign     = (huntTargetBelowNear and tf1_tDn) or (huntTargetAboveNear and tf1_tUp) ? " HTF✅" : (huntTargetBelowNear and tf1_tUp) or (huntTargetAboveNear and tf1_tDn) ? " HTF⚠" : ""
+    f_c(0, 4, "Hunt", c_sub)
+    f_c(1, 4, _huntStageStr + " | " + _huntTgtStr, huntChainStageBull >= 4 ? c_bull : huntChainStageBear >= 4 ? c_bear : huntChainStageBull >= 2 or huntChainStageBear >= 2 ? c_orange : c_sub)
+    f_c(2, 4, _huntPredStr + _htfAlign, _huntProb >= 60 ? c_gold : _huntProb >= 40 ? c_teal : c_sub)
+    f_c(3, 4, "Setup:" + (_sqTotal >= 9 ? "🔥PRIME" : _sqTotal >= 6 ? "✅GOOD" : _sqTotal >= 4 ? "👍OK" : "⚠WEAK") + " " + str.tostring(_sqTotal) + "/12", _sqTotal >= 9 ? c_gold : _sqTotal >= 6 ? c_bull : _sqTotal >= 4 ? c_teal : c_orange)
+
+    tf1_wyGL      = not tf1_wUT and not tf1_wSOW
+    tf1_wyGS      = not tf1_wSPR and not tf1_wSOS
+    tf2_wyGL      = not tf2_wUT and not tf2_wSOW
+    tf2_wyGS      = not tf2_wSPR and not tf2_wSOS
+    bool   _gAnyOpen  = longGateOpen or shortGateOpen
+    bool   _gBothOpen = longGateOpen and shortGateOpen
+    string _diagStr   = trendUp ? f_diagL() : trendDown ? f_diagS() : "Both blocked"
+    string _dirLbl    = trendUp ? "BUY" : trendDown ? "SELL" : "Both"
+    string _gateStr   = not masterFires ? (_gAnyOpen ? "👀 " + (longGateOpen and not shortGateOpen ? "BUY" : not longGateOpen ? "SELL" : _dirLbl) + " open ⏸score" : "🚫 " + _diagStr) : (_gBothOpen ? (trendUp ? "✅ BUY gate+score" : trendDown ? "✅ SELL gate+score" : "⚠ Both open—sideways") : longGateOpen ? "✅ BUY gate+score" : shortGateOpen ? "✅ SELL gate+score" : "🚫 " + _diagStr)
+    color  _gateCol   = not masterFires ? (_gAnyOpen ? c_orange : c_bear) : (_gBothOpen ? ((trendUp or trendDown) ? c_bull : c_orange) : _gAnyOpen ? c_bull : c_bear)
+    if _idmGL and longGateOpen
+        _gateStr := _gateStr + " |IDM↑🔶"
+        _gateCol := c_orange
+    else if _idmGS and shortGateOpen
+        _gateStr := _gateStr + " |IDM↓🔶"
+        _gateCol := c_orange
+    if (_mSwBu and longGateOpen) or (_mSwBe and shortGateOpen)
+        _gateStr := _gateStr + " |SWP⚠"
+        if _gateCol == c_bull
+            _gateCol := c_orange
+    string _trapStr = ""
+    color  _trapCol = c_bull
+    if isTrapLong
+        _trapStr := "⚠ FakeSpring—NO BUY"
+        _trapCol := c_bear
+    else if isTrapShort
+        _trapStr := "⚠ FakeUT—NO SHORT"
+        _trapCol := c_bull
+    if earlyBullBOS
+        _trapStr := "⚡ PREDICT: Break↑ Imminent"
+        _trapCol := c_gold
+    else if earlyBearBOS
+        _trapStr := "⚡ PREDICT: Break↓ Imminent"
+        _trapCol := c_gold    
+    else if _fboWarnBull
+        _trapStr := "🚨 FBO↑ Warn: " + _fboReasonBull
+        _trapCol := c_bear
+    else if _fboWarnBear
+        _trapStr := "🚨 FBO↓ Warn: " + _fboReasonBear
+        _trapCol := c_bull
+    else if isHuntBull and exhaustBull
+        _trapStr := "🚨 BullTrap+RevUP"
+        _trapCol := c_orange
+    else if isHuntBear and exhaustBear
+        _trapStr := "🚨 BearTrap+RevDN"
+        _trapCol := c_orange
+    else if isHuntBull
+        _trapStr := "🚨 BullTrap"
+        _trapCol := c_orange
+    else if isHuntBear
+        _trapStr := "🚨 BearTrap"
+        _trapCol := c_orange
+    else if bullTrapConf
+        _trapStr := "🪤 BOTrap↑ conf"
+        _trapCol := c_bear
+    else if bearTrapConf
+        _trapStr := "🪤 BDTrap↓ conf"
+        _trapCol := c_bull
+    else if exhaustBull
+        _trapStr := "⚡ Exhaust+RevUP"
+        _trapCol := c_teal
+    else if exhaustBear
+        _trapStr := "⚡ Exhaust+RevDN"
+        _trapCol := c_pink
+    else if divBlockLong
+        _trapStr := "📉 CVD↓ blk longs"
+        _trapCol := c_bear
+    else if divBlockShrt
+        _trapStr := "📈 CVD↑ blk shorts"
+        _trapCol := c_bull
+    else
+        _trapStr := "✅ No trap"
+        _trapCol := c_bull
+    color _tradeTrapCol = (_trapStr != "✅ No trap") ? _trapCol : _gateCol
+    f_c(0, 5, "Trade/Trap", c_sub)
+    f_c(1, 5, _gateStr + " | " + _trapStr, _tradeTrapCol)
+    f_c(2, 5, f_tfGate(tf1_vsaGL, tf1_vsaGS, tf1_wyGL, tf1_wyGS, tf1_tUp, tf1_tDn) + " | " + (tf1_hAccB ? "🚨 Hunt↓" : tf1_hAccBr ? "🚨 Hunt↑" : "✅ Clear"), f_tfGateCol(tf1_vsaGL, tf1_vsaGS, tf1_wyGL, tf1_wyGS))
+    f_c(3, 5, f_tfGate(tf2_vsaGL, tf2_vsaGS, tf2_wyGL, tf2_wyGS, tf2_tUp, tf2_tDn) + " | " + (tf2_hAccB ? "🚨 Hunt↓" : tf2_hAccBr ? "🚨 Hunt↑" : "✅ Clear"), f_tfGateCol(tf2_vsaGL, tf2_vsaGS, tf2_wyGL, tf2_wyGS))
+
+
+    _zStr = zDelta >= adaptiveZMin ? "⚡ Buyers z=" + str.tostring(math.round(zDelta*10)/10) : zDelta <= -adaptiveZMin ? "⚡ Sellers z=" + str.tostring(math.round(zDelta*10)/10) : "─ Balanced z=" + str.tostring(math.round(zDelta*10)/10)
+    string _vsaNowStr = f_vsaStr(vsaNoDemand, vsaNoSupply, vsaSellingClimax, vsaBuyingClimax, vsaTest, vsaEffortBear, vsaThrust)
+    color  _vsaNowCol = f_vsaCol(vsaNoDemand, vsaNoSupply, vsaSellingClimax, vsaBuyingClimax, vsaTest, vsaEffortBear, vsaThrust)
+    color  _flowVsaCol = (_vsaNowStr != "─ Normal") ? _vsaNowCol : (zDeltaBull ? c_bull : zDeltaBear ? c_bear : c_sub)
+    
+    string _flowMain = _zStr + " | " + _vsaNowStr
+    if liqGrabBull
+        _flowMain := _flowMain + " 🎯Grab↑"
+        _flowVsaCol := c_bull
+    else if liqGrabBear
+        _flowMain := _flowMain + " 🎯Grab↓"
+        _flowVsaCol := c_bear
+    if ta.crossover(close, vwapLine) and volRatio > 1.5
+        _flowMain := _flowMain + " |VWAP↑"
+        _flowVsaCol := c_bull
+    else if ta.crossunder(close, vwapLine) and volRatio > 1.5
+        _flowMain := _flowMain + " |VWAP↓"
+        _flowVsaCol := c_bear
+    if cvdBullDiv
+        _flowMain := _flowMain + "\n📈 CVD Bull Div"
+        _flowVsaCol := c_bull
+    else if cvdBearDiv
+        _flowMain := _flowMain + "\n📉 CVD Bear Div"
+        _flowVsaCol := c_bear
+    
+    f_c(0, 6, "Flow/VSA", c_sub)
+    f_c(1, 6, _flowMain, _flowVsaCol)
+    f_c(2, 6, (tf1_zDB ? "⚡ Buyers" : tf1_zDBr ? "⚡ Sellers" : "─ Balanced") + " | " + f_vsaStr(tf1_vND, tf1_vNS, tf1_vSC, tf1_vBC, tf1_vT, tf1_vEff, tf1_vTH), tf1_zDB ? c_bull : tf1_zDBr ? c_bear : c_sub)
+    f_c(3, 6, (tf2_zDB ? "⚡ Buyers" : tf2_zDBr ? "⚡ Sellers" : "─ Balanced") + " | " + f_vsaStr(tf2_vND, tf2_vNS, tf2_vSC, tf2_vBC, tf2_vT, tf2_vEff, tf2_vTH), tf2_zDB ? c_bull : tf2_zDBr ? c_bear : c_sub)
+    _smStr = engulfAtBullOB ? "🕯 ENG+OB Buy(" + str.tostring(math.round(volRatio*10)/10) + "×)" : engulfAtBearOB ? "🕯 ENG+OB Sell(" + str.tostring(math.round(volRatio*10)/10) + "×)" : rawInstBuy ? "🏦 Buy(" + str.tostring(math.round(volRatio*10)/10) + "×)" : rawInstSell ? "🏦 Sell(" + str.tostring(math.round(volRatio*10)/10) + "×)" : huntAccBull ? "🎯 Trap+Buy" : huntAccBear ? "🎯 Trap+Sell" : "─ None"
+    f_c(0, 7, "Smart$", c_sub)
+    f_c(1, 7, _smStr, engulfAtBullOB or engulfAtBearOB ? c_gold : rawInstBuy or huntAccBull ? c_bull : rawInstSell or huntAccBear ? c_bear : c_sub)
+    f_c(2, 7, tf1_iB ? "🏦 Buy" : tf1_iS ? "🏦 Sell" : "─ None", tf1_iB ? c_bull : tf1_iS ? c_bear : c_sub)
+    f_c(3, 7, tf2_iB ? "🏦 Buy" : tf2_iS ? "🏦 Sell" : "─ None", tf2_iB ? c_bull : tf2_iS ? c_bear : c_sub)
+
+    _bpScore2   = str.tostring(math.round(buildingPressureSmooth))
+    _bpLabel    = pressureFiresBull ? "🌀 COIL↑ " + _bpScore2 + "%" : pressureFiresBear ? "🌀 COIL↓ " + _bpScore2 + "%" : pressureEarlyWarn ? "⏳ Coil " + _bpScore2 + "%" : _coilReady ? "🔧 Compress " + _bpScore2 + "%" : "─ No coil " + _bpScore2 + "%"
+    _bpCol      = pressureFiresBull ? c_wy : pressureFiresBear ? c_orange : pressureEarlyWarn ? c_teal : _coilReady ? c_pink : c_sub
+    _coilDtl    = "VCO:" + str.tostring(math.round(vcoCompress*100)) + "% ΔSlp:" + (_deltaRisingComp?"↑":_deltaFallingComp?"↓":"─") + " FVG:" + (_dryIntoZone?"✅":"─")
+    f_c(0, 8, "Pressure", c_sub)
+    f_c(1, 8, _bpLabel,   _bpCol)
+    f_c(2, 8, _coilDtl,   _coilReady ? c_teal : c_sub)
+    f_c(3, 8, (_vpZonePersistStr != "" ? _vpZonePersistStr + " |" : "") + "LB:" + str.tostring(adaptSwingLB) + " VSA:" + str.tostring(adaptVsaLBv), _vpZonePersistStr != "" ? c_orange : c_sub)
+
+    if i_mode == "Scalp"
+
+        _vcoScore2  = str.tostring(math.round(vcoScore))
+        _vcoState   = vcoBreakout ? (vcoBullCoil ? "🔥↑" : vcoBearCoil ? "🔥↓" : "🔥brk") : vcoScore > i_vcoThresh * 0.6 ? "⏳coil" : "─flat"
+        _iofiLbl    = iofiBull ? "IMBAL↑" : iofiBear ? "IMBAL↓" : "bal"
+        _cmpLbl     = cmpPhaseExpanding ? " CMP🚀" : cmpPhaseTurning ? " CMPturn" : cmpBullPhase ? " CMP↑" : cmpBearPhase ? " CMP↓" : ""
+        _energyNow  = "VCO:" + _vcoScore2 + _vcoState + " " + _iofiLbl + _cmpLbl
+        _energyNowCol = (vcoBreakout and (iofiBull or iofiBear)) ? c_gold : vcoBreakout ? c_orange : (iofiBull or iofiBear) ? c_teal : cmpPhaseExpanding ? c_bull : c_sub
+
+        _roc3       = close[3] > 0 ? math.abs((close - close[3]) / close[3] * 100) : 0.0
+        _roc10norm  = close[10] > 0 ? math.abs((close - close[10]) / close[10] * 100) / 3.33 : 0.0
+        _velRatio   = _roc10norm > 0.0001 ? _roc3 / _roc10norm : 1.0
+        _velStr     = _velRatio > 1.4 ? "🚀 Accel ×" + str.tostring(math.round(_velRatio * 10) / 10) : _velRatio < 0.6 ? "🛑 Dying ×" + str.tostring(math.round(_velRatio * 10) / 10) : "→ Steady ×" + str.tostring(math.round(_velRatio * 10) / 10)
+        _velCol     = _velRatio > 1.4 ? c_bull : _velRatio < 0.6 ? c_bear : c_sub
+
+        _d3avg      = (math.abs(delta_of) + math.abs(delta_of[1]) + math.abs(delta_of[2])) / 3
+        _d10avg     = ta.sma(math.abs(delta_of), 10)
+        _dAccel     = _d10avg > 0 ? _d3avg / _d10avg : 1.0
+        _dDir       = delta_of > 0 ? "↑" : delta_of < 0 ? "↓" : "─"
+        _dAccelStr  = _dAccel > 1.4 ? "⚡ Building" + _dDir + " ×" + str.tostring(math.round(_dAccel * 10) / 10) : _dAccel < 0.6 ? "↘ Fading" + _dDir + " ×" + str.tostring(math.round(_dAccel * 10) / 10) : "→ Steady" + _dDir + " ×" + str.tostring(math.round(_dAccel * 10) / 10)
+        _dAccelCol  = _dAccel > 1.4 ? c_gold : _dAccel < 0.6 ? c_bear : c_sub
+
+        f_c(0, 9, "Energy", c_sub)
+        f_c(1, 9, _energyNow, _energyNowCol)
+        f_c(2, 9, _velStr,    _velCol)
+        f_c(3, 9, _dAccelStr, _dAccelCol)
+
+
+    int    _scBull  = math.max(scalpScoreBull, scalpScoreBear)
+    int    _swBull  = math.max(swingScoreBull,  swingScoreBear)
+    int    _ivBull  = math.max(investScoreBull, investScoreBear)
+    bool   _scDir   = scalpScoreBull  >= scalpScoreBear
+    bool   _swDir   = swingScoreBull  >= swingScoreBear
+    bool   _ivDir   = investScoreBull >= investScoreBear
+    bool   _scFires = _scBull >= 65
+    bool   _swFires = _swBull >= 72
+    bool   _ivFires = _ivBull >= 78
+    int    _nFires  = (_scFires ? 1 : 0) + (_swFires ? 1 : 0) + (_ivFires ? 1 : 0)
+    string _mPredStr = ""
+    color  _mPredCol = c_sub
+    if _nFires == 0
+        _mPredStr := "─ No setup"
+        _mPredCol := c_sub
+    else if _nFires >= 2
+        int    _bestScore = _scFires and _scBull >= _swBull and _scBull >= _ivBull ? _scBull : _swFires and _swBull >= _ivBull ? _swBull : _ivBull
+        string _bestLbl   = _scFires and _scBull >= _swBull and _scBull >= _ivBull ? "Sc" + (_scDir?"↑":"↓") : _swFires and _swBull >= _ivBull ? "Sw" + (_swDir?"↑":"↓") : "Iv" + (_ivDir?"↑":"↓")
+        _mPredStr := "🔥" + _bestLbl + ":" + str.tostring(_bestScore) + "%"
+        _mPredCol := c_gold
+    else
+        _mPredStr := _scFires ? "⚡Sc" + (_scDir?"↑":"↓") + ":" + str.tostring(_scBull) + "%" : _swFires ? "📊Sw" + (_swDir?"↑":"↓") + ":" + str.tostring(_swBull) + "%" : "🏦Iv" + (_ivDir?"↑":"↓") + ":" + str.tostring(_ivBull) + "%"
+        _mPredCol := _scFires ? c_teal : _swFires ? c_bull : c_teal
+    _mpGap = masterProb - math.round(adaptiveThreshold)
+    f_c(0, _rMPred, "MPred", c_sub)
+    f_c(1, _rMPred, _mPredStr, _mPredCol)
+    f_c(2, _rMPred, (masterFires ? "✅FIRES " : "⏸WAIT ") + (_mpGap >= 0 ? "+" : "") + str.tostring(_mpGap) + "% Thr:" + str.tostring(math.round(adaptiveThreshold)) + "%", masterFires ? c_bull : _mpGap >= -10 ? c_orange : c_sub)
+    string _hmmStr = _boWins ? "HMM:Break " + str.tostring(boProb) + "%" : _trWins ? "HMM:Trend " + str.tostring(trProb) + "%" : _chWins ? "HMM:Chop " + str.tostring(chProb) + "%" : "HMM:B" + str.tostring(boProb) + "T" + str.tostring(trProb) + "C" + str.tostring(chProb)
+    f_c(3, _rMPred, _hmmStr, _boWins ? c_gold : _trWins ? c_bull : _chWins ? c_bear : c_sub)
+
+
+    [_iNow_aa, _iNowCol_aa] = f_inst_col1aa()
+    [_iNow_ab, _iNowCol_ab] = f_inst_col1ab()
+    [_iNow_b,  _iNowCol_b]  = f_inst_col1b()
+    _iNow    = _iNow_aa != "" ? _iNow_aa : _iNow_ab != "" ? _iNow_ab : _iNow_b
+    _iNowCol = _iNow_aa != "" ? _iNowCol_aa : _iNow_ab != "" ? _iNowCol_ab : _iNowCol_b
+    table.cell(hud, 0, _rInst, "Inst",  text_color=c_sub,    bgcolor=color.new(#0D0D14,0), text_size=tSize)
+    table.cell(hud, 1, _rInst, _iNow,  text_color=_iNowCol,  bgcolor=color.new(#0D0D14,0), text_size=tSize)
+    table.cell(hud, 2, _rInst, "",      text_color=c_sub,    bgcolor=color.new(#0D0D14,0), text_size=tSize)
+    table.cell(hud, 3, _rInst, "",      text_color=c_sub,    bgcolor=color.new(#0D0D14,0), text_size=tSize)
+    table.merge_cells(hud, 1, _rInst, 3, _rInst)
+
+    [_pred, _predCol] = f_inst_predict()
+    table.cell(hud, 0, _rPred, "Predict", text_color=c_wy,    bgcolor=color.new(#110D18,0), text_size=tSize)
+    table.cell(hud, 1, _rPred, _pred,    text_color=_predCol,  bgcolor=color.new(#110D18,0), text_size=tSize)
+    table.cell(hud, 2, _rPred, "",        text_color=c_sub,   bgcolor=color.new(#110D18,0), text_size=tSize)
+    table.cell(hud, 3, _rPred, "",        text_color=c_sub,   bgcolor=color.new(#110D18,0), text_size=tSize)
+    table.merge_cells(hud, 1, _rPred, 3, _rPred)
+bool alert_strongLong    = sLF
+bool alert_strongShort   = sSF
+bool alert_normalLong    = nLF and not sLF
+bool alert_normalShort   = nSF and not sSF
+bool alert_huntS4Bull    = huntChainStageBull == 4
+bool alert_huntS4Bear    = huntChainStageBear == 4
+bool alert_huntS5Bull    = huntChainStageBull == 5
+bool alert_huntS5Bear    = huntChainStageBear == 5
+bool alert_spring        = wySpringValid
+bool alert_upthrust      = wyUTValid
+bool alert_engulfBull    = engulfAtBullOB
+bool alert_engulfBear    = engulfAtBearOB
+
+bool alert_absorpBull    = absorptionBull and inBullOB
+bool alert_absorpBear    = absorptionBear and inBearOB
+alertVCO_IOFI_Long  = vcoBreakout and iofiBull and not divBlockLong
+alertVCO_IOFI_Short = vcoBreakout and iofiBear and not divBlockShrt
+
+bool alert_pressureBull = pressureFiresBull  and not pressureFiresBull[1]
+bool alert_pressureBear = pressureFiresBear  and not pressureFiresBear[1]
+bool alert_coilEarly    = pressureEarlyWarn  and not pressureEarlyWarn[1]
+bool alert_kalmanFlipUp  = kalmanFlipUp  and buildingPressureSmooth > 20
+bool alert_kalmanFlipDown= kalmanFlipDown and buildingPressureSmooth > 20
+alertcondition(alert_pressureBull, title="🌀 COIL: Bull Pressure Building",  message="Building Pressure ↑ — Vol dry + price compressed + delta rising. Watch for breakout up.")
+alertcondition(alert_pressureBear, title="🌀 COIL: Bear Pressure Building",  message="Building Pressure ↓ — Vol dry + price compressed + delta falling. Watch for breakout down.")
+alertcondition(alert_coilEarly,    title="⚡ COIL: Early Warning (35%+ score)", message="Coil-ready state entered. Volume drying + price tightening. Pressure building.")
+alertcondition(alert_kalmanFlipUp,  title="📈 KALMAN: Velocity Flip Up",  message="Kalman filter velocity turned positive — early trend reversal signal up.")
+alertcondition(alert_kalmanFlipDown,title="📈 KALMAN: Velocity Flip Down", message="Kalman filter velocity turned negative — early trend reversal signal down.")
+alertcondition(alertVCO_IOFI_Long,  title="🔥 SCALP: VCO + IOFI Buy",  message="VCO Breakout + Aggressive Buy Imbalance! Check for Long entry.")
+alertcondition(alertVCO_IOFI_Short, title="🔥 SCALP: VCO + IOFI Sell", message="VCO Breakout + Aggressive Sell Imbalance! Check for Short entry.")
+
